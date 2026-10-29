@@ -371,7 +371,14 @@ export interface JevResponse {
   [key: string]: unknown;
 }
 
-/** Anything that can answer Jev questions: `JevClient`, or a host-provided adapter. */
-export interface JevAsker {
+/**
+ * The generic judge seam: anything that can answer judge questions about a
+ * state — `JevClient`, a host-provided adapter, or any registry-built
+ * provider. The wire protocol is the Jev question/answer shape.
+ */
+export interface Judge {
   ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;
 }
+
+/** Back-compat alias: the Jev-specific name of the generic `Judge` seam. */
+export type JevAsker = Judge;
