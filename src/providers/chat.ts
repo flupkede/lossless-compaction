@@ -54,6 +54,14 @@ export function chatCompletionsUrl(baseUrl: string): string {
 }
 
 /**
+ * Threshold sent with every payload: the system prompt promises the field
+ * and the student was fine-tuned on it, so omitting it would put every
+ * request off the training distribution. The seam carries no live value
+ * (`keepThreshold` stays adapter-side), matching the shim's default.
+ */
+export const CHAT_JUDGE_KEEP_THRESHOLD = 0.5;
+
+/**
  * The shared judge over any OpenAI-compatible chat completions endpoint:
  * system prompt + {state, questions} payload in, noul JSON out. Ollama and
  * the generic openai-compatible provider (z.ai and friends) both sit on
@@ -92,7 +100,7 @@ export function createChatCompletionsJudge(
           temperature: 0,
           messages: [
             { role: 'system', content: JUDGE_SYSTEM_PROMPT },
-            { role: 'user', content: JSON.stringify({ state, questions }) },
+            { role: 'user', content: JSON.stringify({ state, questions, keepThreshold: CHAT_JUDGE_KEEP_THRESHOLD }) },
           ],
         }),
       });

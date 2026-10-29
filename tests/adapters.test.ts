@@ -125,42 +125,49 @@ describe('jev adapter', () => {
 });
 
 describe('clef adapter', () => {
-  it('defaults to the System One endpoint with clef-latest and no auth header when keyless', async () => {
+  it('fails fast when neither a self-hosted baseUrl nor a hosted key is configured', () => {
+    expect(() => createJudge({ provider: 'clef' }, EMPTY_ENV)).toThrowError(
+      `clef needs a self-hosted endpoint (${FASTCOMP_BASE_URL_ENV}, e.g. an ollama /v1/systemone) ` +
+        `or a hosted key (${FASTCOMP_API_KEY_ENV})`,
+    );
+  });
+
+  it('defaults to the System One endpoint with clef-latest when a hosted key is set', async () => {
     const { impl, calls } = mockFetch({ answers: { q1: { noul: 0.4 } } });
-    const judge = createJudge({ provider: 'clef' }, EMPTY_ENV, impl);
+    const judge = createJudge({ provider: 'clef' }, { [FASTCOMP_API_KEY_ENV]: 'k' }, impl);
     await judge.ask({ context: 'c' }, QUESTIONS);
     expect(calls[0]!.url).toBe(SYSTEM_ONE_URL);
-    const headers = calls[0]!.init.headers as Record<string, string>;
-    expect(headers.authorization).toBeUndefined();
+    expect(calls[0]!.init.headers).toMatchObject({ authorization: 'Bearer k' });
     expect(requestBody(calls[0]!)).toMatchObject({ model: CLEF_DEFAULT_MODEL });
   });
 
-  it('sends Bearer auth once a key is configured and honors a baseUrl override', async () => {
+  it('omits the auth header for a keyless self-hosted endpoint and honors overrides', async () => {
     const { impl, calls } = mockFetch({ answers: {} });
     const judge = createJudge(
       { provider: 'clef' },
       {
-        [FASTCOMP_API_KEY_ENV]: 'k',
         [FASTCOMP_BASE_URL_ENV]: 'http://ollama.lan:11434/v1/systemone',
         [FASTCOMP_MODEL_ENV]: 'clef-mix',
       },
       impl,
     );
-    await judge.ask('state', QUESTIONS);
+    await judge.ask({ context: 'c' }, QUESTIONS);
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers.authorization).toBeUndefined();
     expect(calls[0]!.url).toBe('http://ollama.lan:11434/v1/systemone');
-    expect(calls[0]!.init.headers).toMatchObject({ authorization: 'Bearer k' });
     expect(requestBody(calls[0]!)).toMatchObject({ model: 'clef-mix' });
   });
 
   it('throws the judge request failure on a non-ok response', async () => {
     const { impl } = mockFetch('boom', 500);
-    const judge = createJudge({ provider: 'clef' }, EMPTY_ENV, impl);
+    const judge = createJudge({ provider: 'clef' }, { [FASTCOMP_API_KEY_ENV]: 'k' }, impl);
     await expect(judge.ask('state', QUESTIONS)).rejects.toThrow('judge request failed (500): boom');
   });
 });
 
 describe('ollama adapter', () => {
-  it('defaults to localhost:11435/v1 with the fast-compaction student and no auth', async () => {
+  it('defaults to plain ollama on 11434 with the fast-compaction student and no auth', async () => {
+    expect(OLLAMA_DEFAULT_BASE_URL).toBe('http://localhost:11434/v1');
     const { impl, calls } = mockFetch(noulReply({ q1: 0.9, q2: 0.1 }));
     const judge = createJudge({ provider: 'ollama' }, EMPTY_ENV, impl);
     await judge.ask('state', QUESTIONS);
@@ -175,7 +182,14 @@ describe('ollama adapter', () => {
     });
     expect(body.messages).toEqual([
       { role: 'system', content: JUDGE_SYSTEM_PROMPT },
-      { role: 'user', content: JSON.stringify({ state: 'state', questions: QUESTIONS }) },
+      {
+        role: 'user',
+        content: JSON.stringify({
+          state: 'state',
+          questions: QUESTIONS,
+          keepThreshold: 0.5,
+        }),
+      },
     ]);
   });
 
