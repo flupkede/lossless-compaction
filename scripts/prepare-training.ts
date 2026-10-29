@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { TrainingRecord } from '../src/index.js';
 
-export const JUDGE_SYSTEM_PROMPT = `You are a context-compaction judge. The user message holds a JSON object with "state" (the conversation history, tool results omitted, identifiers pseudonymised), "questions" (ids mapped to noul instructions) and "keepThreshold". Reply with a JSON object mapping every question id to {"type":"noul","noul":p} where p in [0,1] is the probability the item should stay in the compacted history. Output JSON only.`;
+export { JUDGE_SYSTEM_PROMPT } from '../src/providers/prompt.js';
+import { JUDGE_SYSTEM_PROMPT } from '../src/providers/prompt.js';
 
 export interface FineTuneExample {
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[];

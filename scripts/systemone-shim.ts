@@ -11,6 +11,9 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { JUDGE_SYSTEM_PROMPT } from './prepare-training.js';
+import { extractJson, toAnswers } from '../src/providers/chat.js';
+
+export { extractJson, toAnswers };
 import type { JevQuestions, JevResponse, JevState } from '../src/index.js';
 
 export interface ShimOptions {
@@ -29,50 +32,8 @@ const DEFAULTS: ShimOptions = {
   numCtx: 32768,
 };
 
-/** Strips Qwen3 reasoning blocks; parses the first *balanced* JSON object,
- * ignoring whatever the model appended after it (observed live: an echoed
- * second object made first-brace-to-last-brace span both and fail). */
-export function extractJson(text: string): unknown {
-  const clean = text.replace(/<think>[\s\S]*?<\/think>/g, '');
-  const start = clean.indexOf('{');
-  if (start === -1) throw new Error('student reply has no JSON object');
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < clean.length; i += 1) {
-    const ch = clean[i]!;
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (inString && ch === '\\') {
-      escaped = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === '{') depth += 1;
-    else if (ch === '}' && (depth -= 1) === 0) {
-      return JSON.parse(clean.slice(start, i + 1));
-    }
-  }
-  throw new Error('student reply has no balanced JSON object');
-}
-
-/** Maps the student's reply onto every question id; missing/unparseable -> 0.5. */
-export function toAnswers(questions: JevQuestions, reply: unknown): JevResponse {
-  const parsed = typeof reply === 'object' && reply !== null ? (reply as Record<string, unknown>) : {};
-  const answers: JevResponse['answers'] = {};
-  for (const id of Object.keys(questions)) {
-    const value = (parsed as Record<string, { noul?: unknown }>)[id]?.noul;
-    const noul = typeof value === 'number' && Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5;
-    answers[id] = { type: 'noul', noul };
-  }
-  return { answers };
-}
+// extractJson and toAnswers live in src/providers/chat.ts and are re-exported
+// above: the adapters use the exact translation the shim serves.
 
 /** Judge timing from an ollama chat response; undefined when it reports none. */
 export function judgeMetrics(data: Record<string, unknown>): JevResponse['judge'] {

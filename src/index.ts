@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './judge.js';
+export * from './providers/index.js';
 export * from './redact.js';
 export * from './strip.js';
 export * from './request.js';

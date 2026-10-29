@@ -24,7 +24,9 @@ export function buildJevRequest(
     url: params.baseUrl ?? SYSTEM_ONE_URL,
     method: 'POST',
     headers: {
-      authorization: `Bearer ${params.apiKey}`,
+      // Self-hosted System One endpoints (ollama) need no key; an empty
+      // bearer would be a malformed credential, so omit the header instead.
+      ...(params.apiKey ? { authorization: `Bearer ${params.apiKey}` } : {}),
       'content-type': 'application/json',
     },
     body: JSON.stringify({
