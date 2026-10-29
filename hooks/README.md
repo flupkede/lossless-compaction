@@ -1,10 +1,10 @@
-# fast-compaction Claude Code mod
+# lossless-compaction Claude Code mod
 
 This plugin uses Claude Code function hooks to replace a compaction with the
 original messages, minus the tool calls and tool results Jev judged no longer
 needed. `hooks/fast-compaction.ts` is a thin adapter: it reads the plugin options,
 finds the TypeSafe key, hands `session.compact` transcripts to the
-`fast-compaction` library in `src/` (the plugin folder is the repository
+`lossless-compaction` library in `src/` (the plugin folder is the repository
 root, so the hook imports it directly) and maps the result back onto session
 messages. User and assistant text is never touched. Jev is sent the whole
 conversation as `state` (tool outputs replaced by a one-line note) and, for
@@ -121,7 +121,7 @@ reduction, duration). Against a shim-backed local judge it also shows where
 the time goes per compaction: model load + prefill + generation, averaged
 over the Jev compactions that reported it.
 
-`/compress` queues fast-compaction for right after the current turn — the host
+`/compress` queues lossless-compaction for right after the current turn — the host
 refuses a nested compaction inside a command hook, so the `turn.complete` hook
 runs it past the percent threshold.
 

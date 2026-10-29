@@ -1,4 +1,4 @@
-# fast-compaction
+# lossless-compaction
 
 Repo instruction doc. Vendor-named variants (`CLAUDE.md`) mean the same.
 

@@ -1,4 +1,4 @@
-# fast-compaction
+# lossless-compaction
 
 Claude Code plugin that replaces the compaction summary with judge decisions:
 every tool call and result is scored in one fast request, stale ones are
@@ -78,12 +78,17 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 ## Install and usage
 
 ```sh
-npm install fast-compaction
+npm install lossless-compaction
 export TYPESAFE_API_KEY=...
 ```
 
+> **Migrating from `fast-compaction`?** The project was renamed to
+> `lossless-compaction` (the GitHub repository was renamed too; old URLs
+> redirect). Install under the new name — releases ship only as
+> `lossless-compaction`.
+
 ```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-compaction';
+import { compactMessages, reductionRatio, type Message } from 'lossless-compaction';
 
 const transcript: Message[] = [
   { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
