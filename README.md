@@ -18,7 +18,7 @@ The repository is both an npm package (`src/`) and a Claude Code plugin
 (`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
 built-in compaction summary with the original messages.
 
-## Secret redaction (fork of tamaratran/fast-jev-compaction)
+## Secret redaction
 
 Only the state sent to judge (`src/state.ts`) is affected — the transcript
 `compact()` returns to the caller is untouched, so nothing kept locally is
@@ -277,7 +277,7 @@ Then add this repository as a plugin marketplace and install the plugin,
 either from the shell or as slash commands inside a session:
 
 ```sh
-claude plugin marketplace add tamaratran/fast-jev-compaction
+claude plugin marketplace add flupkede/lossless-compaction
 claude plugin install fast-compaction@fast-compaction
 ```
 
