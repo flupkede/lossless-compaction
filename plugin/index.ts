@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { Plugin } from '@opencode/plugin';
 import {
   JevClient,
@@ -40,6 +43,8 @@ interface PluginOptions extends CompactOptions {
   floodMinCallsSinceCompact?: number;
   toolCallLimit?: number;
   toolCallWindowMs?: number;
+  /** JSONL compaction ledger; default ~/.fast-compaction/opencode-ledger.jsonl, false disables. */
+  ledger?: string | false;
 }
 
 function makeAsker(options: PluginOptions): JevAsker {
@@ -81,8 +86,23 @@ export default Plugin.define({
       floodMinCallsSinceCompact,
       toolCallLimit,
       toolCallWindowMs,
+      ledger,
       ...rest
     } = (ctx.options ?? {}) as PluginOptions;
+    const ledgerPath =
+      ledger === false
+        ? undefined
+        : typeof ledger === 'string' && ledger
+          ? ledger
+          : join(homedir(), '.fast-compaction', 'opencode-ledger.jsonl');
+    // logging must never break compaction
+    const ledger_ = (entry: Record<string, unknown>) => {
+      if (!ledgerPath) return;
+      try {
+        mkdirSync(ledgerPath.slice(0, ledgerPath.lastIndexOf('/')), { recursive: true });
+        appendFileSync(ledgerPath, `${JSON.stringify(entry)}\n`);
+      } catch {}
+    };
     const judge = makeAsker({ ...rest, asker, model, ollamaModel, ollamaTimeoutMs, ollamaUrl, apiKey });
     const floor = minReductionRatio ?? DEFAULTS.minReductionRatio;
     const storeKey = (sessionID: string) => `session/${sessionID}`;
@@ -134,7 +154,10 @@ export default Plugin.define({
         ) as OcMessage[];
         const fc = toFcMessages(incoming);
         const result = await compact(fc, judge, rest);
-        if (reductionRatio(result) < floor) return; // below the floor: keep the native summary
+        if (reductionRatio(result) < floor) {
+          ledger_({ ts: new Date().toISOString(), session: event.sessionID, outcome: 'fallback-low' });
+          return; // below the floor: keep the native summary
+        }
         const resolved = resolveOptions(rest);
         const calls = collectToolCalls(
           fc,
@@ -151,7 +174,24 @@ export default Plugin.define({
         );
         await ctx.storage.set(storeKey(event.sessionID), kept as unknown as Parameters<typeof ctx.storage.set>[1]);
         event.result = { summary: markerSummary(result.stats) };
-      } catch {
+        ledger_({
+          ts: new Date().toISOString(),
+          session: event.sessionID,
+          outcome: 'compacted',
+          ratio: reductionRatio(result),
+          ms: result.stats.ms,
+          requests: result.stats.requests,
+          kept: result.stats.messagesAfter,
+          before: result.stats.messagesBefore,
+          partial: result.stats.partial ?? false,
+        });
+      } catch (error) {
+        ledger_({
+          ts: new Date().toISOString(),
+          session: event.sessionID,
+          outcome: 'fallback-error',
+          error: String(error).slice(0, 200),
+        });
         // judge failure or malformed answers: fall back to the native summary
       }
     });
