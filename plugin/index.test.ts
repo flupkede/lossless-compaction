@@ -27,7 +27,7 @@ const plugin = (await import('./index.js')).default as {
 function makeCtx(options: Record<string, unknown> = {}, storage = new Map<string, unknown>()) {
   const hooks: Record<string, (event: never) => Promise<void> | void> = {};
   const ctx = {
-    options,
+    options: { ledger: false, ...options },
     storage: {
       get: async (key: string) => storage.get(key),
       set: async (key: string, value: unknown) => {
@@ -148,6 +148,7 @@ describe('fast-compaction plugin hooks', () => {
       },
     };
     await plugin.setup(ctx as never);
+    compact.mockReturnValue({ stats, decisions: [], messageDecisions: [] });
     await hooks.compaction({ sessionID: 's9', messages: [] } as never);
     await wrapped!({}, { sessionID: 's9' });
     await wrapped!({}, { sessionID: 's9' });

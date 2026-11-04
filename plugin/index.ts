@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { Plugin } from '@opencode/plugin';
 import {
   JevClient,
@@ -99,7 +99,7 @@ export default Plugin.define({
     const ledger_ = (entry: Record<string, unknown>) => {
       if (!ledgerPath) return;
       try {
-        mkdirSync(ledgerPath.slice(0, ledgerPath.lastIndexOf('/')), { recursive: true });
+        mkdirSync(dirname(ledgerPath), { recursive: true });
         appendFileSync(ledgerPath, `${JSON.stringify(entry)}\n`);
       } catch {}
     };
@@ -197,9 +197,13 @@ export default Plugin.define({
     });
 
     await ctx.session.hook('context', async (event) => {
-      const stored = (await ctx.storage.get(storeKey(event.sessionID))) as OcMessage[] | undefined;
-      if (!stored) return;
-      event.messages = restoreMessages(stored, event.messages as OcMessage[]) as typeof event.messages;
+      try {
+        const stored = (await ctx.storage.get(storeKey(event.sessionID))) as unknown;
+        if (!Array.isArray(stored)) return;
+        event.messages = restoreMessages(stored as OcMessage[], event.messages as OcMessage[]) as typeof event.messages;
+      } catch {
+        // storage failure must never break the model call
+      }
     });
   },
 });
