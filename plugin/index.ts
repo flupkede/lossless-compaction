@@ -10,6 +10,15 @@ import {
 } from 'fast-compaction';
 import type { CompactOptions, JevAsker, JevQuestions, JevResponse, JevState } from 'fast-compaction';
 import { applyOcDecisions, markerSummary, restoreMessages, toFcMessages, type OcMessage } from './adapter.js';
+import {
+  FLOOD_DEFAULTS,
+  freshLoop,
+  recordCall,
+  recordCompaction,
+  shouldDeny,
+  type FloodOptions,
+  type LoopState,
+} from './guards.js';
 
 const DEFAULTS = {
   ollamaModel: 'clef-flash',
@@ -26,6 +35,11 @@ interface PluginOptions extends CompactOptions {
   ollamaTimeoutMs?: number;
   ollamaUrl?: string;
   minReductionRatio?: number;
+  floodWindowMs?: number;
+  floodMinCompactions?: number;
+  floodMinCallsSinceCompact?: number;
+  toolCallLimit?: number;
+  toolCallWindowMs?: number;
 }
 
 function makeAsker(options: PluginOptions): JevAsker {
@@ -54,13 +68,65 @@ function makeAsker(options: PluginOptions): JevAsker {
 export default Plugin.define({
   id: 'fast-compaction',
   async setup(ctx) {
-    const { asker, model, ollamaModel, ollamaTimeoutMs, ollamaUrl, minReductionRatio, apiKey, ...rest } =
-      (ctx.options ?? {}) as PluginOptions;
+    const {
+      asker,
+      model,
+      ollamaModel,
+      ollamaTimeoutMs,
+      ollamaUrl,
+      minReductionRatio,
+      apiKey,
+      floodWindowMs,
+      floodMinCompactions,
+      floodMinCallsSinceCompact,
+      toolCallLimit,
+      toolCallWindowMs,
+      ...rest
+    } = (ctx.options ?? {}) as PluginOptions;
     const judge = makeAsker({ ...rest, asker, model, ollamaModel, ollamaTimeoutMs, ollamaUrl, apiKey });
     const floor = minReductionRatio ?? DEFAULTS.minReductionRatio;
     const storeKey = (sessionID: string) => `session/${sessionID}`;
+    const num = (value: unknown, fallback: number) =>
+      typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    const flood: FloodOptions = {
+      floodWindowMs: num(floodWindowMs, FLOOD_DEFAULTS.floodWindowMs),
+      // clamped to >=1 like the hook: 0 would make the thrash condition
+      // vacuously true and degrade the guard to a raw call limiter
+      floodMinCompactions: Math.max(1, num(floodMinCompactions, FLOOD_DEFAULTS.floodMinCompactions)),
+      floodMinCallsSinceCompact: Math.max(
+        1,
+        num(floodMinCallsSinceCompact, FLOOD_DEFAULTS.floodMinCallsSinceCompact),
+      ),
+      toolCallLimit: num(toolCallLimit, FLOOD_DEFAULTS.toolCallLimit),
+      toolCallWindowMs: num(toolCallWindowMs, FLOOD_DEFAULTS.toolCallWindowMs),
+    };
+    const loops = new Map<string, LoopState>();
+    const loopOf = (sessionID: string) => {
+      const loop = loops.get(sessionID) ?? freshLoop();
+      loops.set(sessionID, loop);
+      return loop;
+    };
+
+    // Effect-based flood guard: deny a tool only when its loop is thrashing.
+    await ctx.tool.transform((editor) => {
+      for (const tool of editor.list()) {
+        editor.update(tool.id, (definition) => {
+          const execute = definition.execute;
+          if (!execute) return;
+          definition.execute = async (input, context) => {
+            const loop = loopOf(context.sessionID);
+            const deny = shouldDeny(loop, tool.id, flood);
+            if (deny) throw new Error(deny);
+            recordCall(loop, tool.id);
+            return execute(input, context);
+          };
+        });
+      }
+    });
 
     await ctx.session.hook('compaction', async (event) => {
+      const loop = loopOf(event.sessionID);
+      recordCompaction(loop);
       try {
         const stored = (await ctx.storage.get(storeKey(event.sessionID))) as OcMessage[] | undefined;
         const incoming = (

@@ -39,6 +39,11 @@ function makeCtx(options: Record<string, unknown> = {}, storage = new Map<string
         hooks[name] = handler;
       },
     },
+    tool: {
+      transform: async (mutate: (editor: { list: () => never[]; update: () => void }) => void) => {
+        mutate({ list: () => [], update: () => {} });
+      },
+    },
   };
   return { ctx: ctx as never, hooks, storage };
 }
@@ -103,5 +108,51 @@ describe('fast-compaction plugin hooks', () => {
     expect(event.messages).toHaveLength(2);
     expect(event.messages[0]).toBe(stored[0]);
     expect(event.messages[1]).toBe(fresh);
+  });
+
+  it('denies a thrashing tool before execute and records passing calls', async () => {
+    const executed = vi.fn();
+    let wrapped: ((input: unknown, context: { sessionID: string }) => Promise<unknown>) | undefined;
+    const hooks: Record<string, (event: never) => Promise<void> | void> = {};
+    const ctx = {
+      options: { floodMinCompactions: 1, floodMinCallsSinceCompact: 2 },
+      storage: { get: async () => undefined, set: async () => {} },
+      session: {
+        hook: async (name: string, handler: (event: never) => Promise<void> | void) => {
+          hooks[name] = handler;
+        },
+      },
+      tool: {
+        transform: async (
+          mutate: (editor: {
+            list: () => { id: string }[];
+            update: (id: string, change: (definition: { execute: unknown }) => void) => void;
+          }) => void,
+        ) => {
+          mutate({
+            list: () => [{ id: 'dam_browser' }],
+            update: (_id, change) => {
+              const definition = {
+                execute: async () => {
+                  executed();
+                  return 'ok';
+                },
+              };
+              const original = definition.execute;
+              change(definition);
+              expect(definition.execute).not.toBe(original); // guard installed
+              wrapped = definition.execute as typeof wrapped;
+            },
+          });
+        },
+      },
+    };
+    await plugin.setup(ctx as never);
+    await hooks.compaction({ sessionID: 's9', messages: [] } as never);
+    await wrapped!({}, { sessionID: 's9' });
+    await wrapped!({}, { sessionID: 's9' });
+    expect(executed).toHaveBeenCalledTimes(2);
+    await expect(wrapped!({}, { sessionID: 's9' })).rejects.toThrow('denied');
+    expect(executed).toHaveBeenCalledTimes(2); // deny happens before execute
   });
 });
