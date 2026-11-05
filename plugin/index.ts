@@ -104,6 +104,14 @@ export default Plugin.define({
       } catch {}
     };
     const judge = makeAsker({ ...rest, asker, model, ollamaModel, ollamaTimeoutMs, ollamaUrl, apiKey });
+    // bounded judge time per compaction: an unbounded first pass of a huge
+    // transcript pinned the GPU for many minutes; unanswered candidates stay
+    // (conservative) and the next compaction judges the remainder
+    const compactOptions: CompactOptions = {
+      ...rest,
+      timeBudgetMs: rest.timeBudgetMs ?? 45_000,
+      tolerateRequestFailures: rest.tolerateRequestFailures ?? true,
+    };
     const floor = minReductionRatio ?? DEFAULTS.minReductionRatio;
     const storeKey = (sessionID: string) => `session/${sessionID}`;
     const num = (value: unknown, fallback: number) =>
@@ -153,12 +161,12 @@ export default Plugin.define({
           stored ? restoreMessages(stored, event.messages as OcMessage[]) : event.messages
         ) as OcMessage[];
         const fc = toFcMessages(incoming);
-        const result = await compact(fc, judge, rest);
+        const result = await compact(fc, judge, compactOptions);
         if (reductionRatio(result) < floor) {
           ledger_({ ts: new Date().toISOString(), session: event.sessionID, outcome: 'fallback-low' });
           return; // below the floor: keep the native summary
         }
-        const resolved = resolveOptions(rest);
+        const resolved = resolveOptions(compactOptions);
         const calls = collectToolCalls(
           fc,
           resolved.preserveRecentMessages,
