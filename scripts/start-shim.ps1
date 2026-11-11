@@ -6,7 +6,7 @@ $repo = 'C:\WorkArea\AI\fast-compaction'
 $port = 11435
 $npx = 'C:\nvm4w\nodejs\npx.cmd'
 $log = "$env:TEMP\shim-start.log"
-function Step($text) { Add-Content -Path $log -Value "$(Get-Date -Format 'HH:mm:ss') $text" }
+function Step($text) { Add-Content -Path $log -Value "$(Get-Date -Format 'HH:mm:ss') $text" -ErrorAction SilentlyContinue }
 
 Step "run start"
 $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
