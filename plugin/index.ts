@@ -163,7 +163,19 @@ export default Plugin.define({
         const fc = toFcMessages(incoming);
         const result = await compact(fc, judge, compactOptions);
         if (reductionRatio(result) < floor) {
-          ledger_({ ts: new Date().toISOString(), session: event.sessionID, outcome: 'fallback-low' });
+          // tolerateRequestFailures turns a dead judge into ratio 0 here: log
+          // the stats so requests:0 (judge down) is separable from few candidates
+          ledger_({
+            ts: new Date().toISOString(),
+            session: event.sessionID,
+            outcome: 'fallback-low',
+            ratio: reductionRatio(result),
+            ms: result.stats.ms,
+            requests: result.stats.requests,
+            kept: result.stats.messagesAfter,
+            before: result.stats.messagesBefore,
+            partial: result.stats.partial ?? false,
+          });
           return; // below the floor: keep the native summary
         }
         const resolved = resolveOptions(compactOptions);
