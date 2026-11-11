@@ -1,0 +1,14 @@
+<service>
+  <id>fast-compaction-ollama</id>
+  <name>fast-compaction ollama</name>
+  <description>Ollama judge server for fast-compaction (port 11434). Restarts on failure; starts at boot.</description>
+  <executable>C:\Users\develterf\AppData\Local\Programs\Ollama\ollama.exe</executable>
+  <arguments>serve</arguments>
+  <workingdirectory>C:\Users\develterf\AppData\Local\Programs\Ollama</workingdirectory>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delaySec="5"/>
+  <log mode="roll" />
+  <env name="OLLAMA_HOST" value="127.0.0.1:11434"/>
+  <env name="OLLAMA_MODELS" value="C:\Users\develterf\.ollama\models"/>
+  <env name="OLLAMA_KEEP_ALIVE" value="8760h"/>
+</service>
