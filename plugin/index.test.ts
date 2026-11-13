@@ -78,6 +78,18 @@ describe('fast-compaction plugin hooks', () => {
     expect((event as { result?: unknown }).result).toBeUndefined();
   });
 
+  it('stores below-floor progress when a stored list already exists', async () => {
+    const { ctx, hooks, storage } = makeCtx({ minReductionRatio: 0.75 });
+    storage.set('session/s1', [{ role: 'user', content: [{ type: 'text', text: 'old' }] }]);
+    await plugin.setup(ctx);
+    reductionRatio.mockReturnValue(0.5);
+    compact.mockReturnValue({ stats, decisions: [], messageDecisions: [] });
+    const event = { sessionID: 's1', messages: [] };
+    await hooks.compaction(event as never);
+    expect(storage.has('session/s1')).toBe(true);
+    expect((event as { result?: { summary: string } }).result?.summary).toMatch(/^\[fast-compaction\]/);
+  });
+
   it('keeps the native summary when the judge throws', async () => {
     const { ctx, hooks, storage } = makeCtx();
     await plugin.setup(ctx);

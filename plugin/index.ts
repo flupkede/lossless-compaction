@@ -162,7 +162,11 @@ export default Plugin.define({
         ) as OcMessage[];
         const fc = toFcMessages(incoming);
         const result = await compact(fc, judge, compactOptions);
-        if (reductionRatio(result) < floor) {
+        // The floor guards only the first pass: with no stored list the native
+        // summary is real and may beat a near-nothing reduction. Once storage
+        // exists the summary is overridden by the context hook's restore, so
+        // rejecting progress would pin the context at the old size forever.
+        if (stored === undefined && reductionRatio(result) < floor) {
           // tolerateRequestFailures turns a dead judge into ratio 0 here: log
           // the stats so requests:0 (judge down) is separable from few candidates
           ledger_({
