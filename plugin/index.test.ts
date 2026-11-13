@@ -127,7 +127,7 @@ describe('fast-compaction plugin hooks', () => {
     let wrapped: ((input: unknown, context: { sessionID: string }) => Promise<unknown>) | undefined;
     const hooks: Record<string, (event: never) => Promise<void> | void> = {};
     const ctx = {
-      options: { floodMinCompactions: 1, floodMinCallsSinceCompact: 2 },
+      options: { floodMinCompactions: 1, floodMinCallsSinceCompact: 2, ledger: false },
       storage: { get: async () => undefined, set: async () => {} },
       session: {
         hook: async (name: string, handler: (event: never) => Promise<void> | void) => {

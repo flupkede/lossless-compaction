@@ -111,19 +111,30 @@ describe('restoreMessages', () => {
     expect(isMarkerSummary(userMsg)).toBe(false);
   });
 
-  it('adds a sniffed mediaType to untyped base64 media parts (core crashes without one)', () => {
+  it('derives mediaType from the filename extension when the data is not sniffable', () => {
     const stored: OcMessage[] = [
       {
         id: 'msg_m1',
         role: 'user',
-        content: [
-          { type: 'media', filename: 'shot.png', media: { source: { type: 'base64', data: 'iVBORw0KGgoAAAANSU' } } },
-        ],
+        content: [{ type: 'media', filename: 'shot.png', media: { source: { type: 'base64', data: 'AAAA' } } }],
       },
     ];
     const restored = restoreMessages(stored, [userMsg]);
     const part = (restored[0]!.content as Array<{ type: string; media?: { mediaType?: string } }>)[0]!;
     expect(part.media?.mediaType).toBe('image/png');
+  });
+
+  it('sniffs mediaType from base64 magic when no filename extension helps', () => {
+    const stored: OcMessage[] = [
+      {
+        id: 'msg_m1b',
+        role: 'user',
+        content: [{ type: 'media', media: { source: { type: 'base64', data: '/9j/4AAQ' } } }],
+      },
+    ];
+    const restored = restoreMessages(stored, []);
+    const part = (restored[0]!.content as Array<{ type: string; media?: { mediaType?: string } }>)[0]!;
+    expect(part.media?.mediaType).toBe('image/jpeg');
   });
 
   it('keeps an existing mediaType and falls back to a text part when none can be derived', () => {
