@@ -11,4 +11,9 @@
   <env name="OLLAMA_HOST" value="127.0.0.1:11434"/>
   <env name="OLLAMA_MODELS" value="C:\Users\develterf\.ollama\models"/>
   <env name="OLLAMA_KEEP_ALIVE" value="8760h"/>
+  <!-- num_ctx 32768 KV cache must fit the 6 GB shared laptop GPU: flash attention + q8_0
+       halves it to ~1.8 GB; without it ~1.1 GB spills to system RAM (60-125 s judge
+       requests observed 2026-11-13). Agreement re-measured >= 98% after enabling. -->
+  <env name="OLLAMA_FLASH_ATTENTION" value="1"/>
+  <env name="OLLAMA_KV_CACHE_TYPE" value="q8_0"/>
 </service>
