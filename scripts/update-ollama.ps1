@@ -45,5 +45,19 @@ for ($i = 0; $i -lt 20; $i++) {
 if (-not $up) { Write-Host 'ERROR: ollama not listening on 11434 after 40s - check services.msc'; exit 1 }
 Write-Host "ollama up: $((& $exe --version) -join ' ')"
 
-& (Join-Path $repo 'scripts\start-shim.ps1')
+# shim: restart its service when present, else the manual script
+$shimService = Get-Service -Name 'fast-compaction-shim' -ErrorAction SilentlyContinue
+if ($shimService) {
+  sc.exe stop fast-compaction-shim | Out-Null
+  Start-Sleep 3
+  sc.exe start fast-compaction-shim | Out-Null
+} else {
+  & (Join-Path $repo 'scripts\start-shim.ps1')
+}
+$shimUp = $false
+for ($i = 0; $i -lt 15; $i++) {
+  Start-Sleep 2
+  if (Get-NetTCPConnection -LocalPort 11435 -State Listen -ErrorAction SilentlyContinue) { $shimUp = $true; break }
+}
+if (-not $shimUp) { Write-Host 'ERROR: shim not listening on 11435 - check services.msc'; exit 1 }
 Write-Host 'done: service + shim verified'

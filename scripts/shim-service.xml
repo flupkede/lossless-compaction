@@ -1,0 +1,11 @@
+<service>
+  <id>fast-compaction-shim</id>
+  <name>fast-compaction shim</name>
+  <description>SystemOne judge shim for fast-compaction (port 11435, fronts ollama on 11434). Restarts on failure; starts at boot.</description>
+  <executable>C:\nvm4w\nodejs\node.exe</executable>
+  <arguments>C:\WorkArea\AI\fast-compaction\node_modules\tsx\dist\cli.mjs scripts\systemone-shim.ts --port 11435 --ollama http://localhost:11434 --model fast-compaction --num-ctx 32768 --keep-alive 8760h</arguments>
+  <workingdirectory>C:\WorkArea\AI\fast-compaction</workingdirectory>
+  <startmode>Automatic</startmode>
+  <onfailure action="restart" delaySec="5"/>
+  <log mode="roll"/>
+</service>
