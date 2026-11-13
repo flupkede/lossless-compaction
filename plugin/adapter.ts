@@ -42,6 +42,49 @@ function resultValue(part: OcPart): string {
   return value === undefined ? '' : JSON.stringify(value);
 }
 
+const MEDIA_MIME_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  pdf: 'application/pdf',
+};
+
+/** Base64 magic prefixes for unambiguous file signatures. */
+const MEDIA_MAGIC: Array<[prefix: string, mime: string]> = [
+  ['iVBOR', 'image/png'],
+  ['/9j/', 'image/jpeg'],
+  ['R0lGOD', 'image/gif'],
+  ['JVBER', 'application/pdf'],
+];
+
+function mediaMime(part: OcPart): string | undefined {
+  const media = part.media as { mediaType?: unknown; source?: { type?: unknown; data?: unknown } } | undefined;
+  if (typeof media?.mediaType === 'string' && media.mediaType) return media.mediaType;
+  const name = typeof part.filename === 'string' ? part.filename : '';
+  const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
+  if (MEDIA_MIME_BY_EXT[ext]) return MEDIA_MIME_BY_EXT[ext];
+  if (media?.source?.type === 'base64' && typeof media.source.data === 'string') {
+    for (const [magic, mime] of MEDIA_MAGIC) if (media.source.data.startsWith(magic)) return mime;
+  }
+  return undefined;
+}
+
+/** Core's request preparation calls startsWith on part.media.mediaType; a media part
+ * without it (observed in compaction-hook messages) crashes every later model call. */
+function normalizeMessage(message: OcMessage): OcMessage {
+  const parts = partsOf(message);
+  if (!parts.some((part) => part.type === 'media')) return message;
+  const content = parts.map((part) => {
+    if (part.type !== 'media') return part;
+    const mime = mediaMime(part);
+    if (mime) return { ...part, media: { ...(part.media as object), mediaType: mime } };
+    return { type: 'text', text: '[unsupported media part removed]' };
+  });
+  return { ...message, content };
+}
+
 /** Index-aligned: oc[i] is judged as fc[i]; `role:'tool'` maps to a user result holder. */
 export function toFcMessages(messages: readonly OcMessage[]): Message[] {
   return messages.map((message) => {
@@ -154,7 +197,8 @@ export function isMarkerSummary(message: OcMessage): boolean {
   return message.role === 'user' && textOf(partsOf(message)).startsWith(SUMMARY_PREFIX);
 }
 
-/** Stored verbatim list + everything new; markers and id duplicates dropped. */
+/** Stored verbatim list + everything new; markers and id duplicates dropped;
+ * media parts normalized so an untyped part can never reach core's preparation. */
 export function restoreMessages(
   stored: readonly OcMessage[],
   incoming: readonly OcMessage[],
@@ -163,5 +207,5 @@ export function restoreMessages(
   const tail = incoming.filter(
     (message) => !isMarkerSummary(message) && !(message.id && ids.has(message.id)),
   );
-  return [...stored, ...tail];
+  return [...stored, ...tail].map(normalizeMessage);
 }

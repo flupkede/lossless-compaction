@@ -110,6 +110,39 @@ describe('restoreMessages', () => {
     expect(isMarkerSummary({ role: 'user', content: [{ type: 'text', text: '[fast-compaction] x' }] })).toBe(true);
     expect(isMarkerSummary(userMsg)).toBe(false);
   });
+
+  it('adds a sniffed mediaType to untyped base64 media parts (core crashes without one)', () => {
+    const stored: OcMessage[] = [
+      {
+        id: 'msg_m1',
+        role: 'user',
+        content: [
+          { type: 'media', filename: 'shot.png', media: { source: { type: 'base64', data: 'iVBORw0KGgoAAAANSU' } } },
+        ],
+      },
+    ];
+    const restored = restoreMessages(stored, [userMsg]);
+    const part = (restored[0]!.content as Array<{ type: string; media?: { mediaType?: string } }>)[0]!;
+    expect(part.media?.mediaType).toBe('image/png');
+  });
+
+  it('keeps an existing mediaType and falls back to a text part when none can be derived', () => {
+    const typed: OcMessage = {
+      id: 'msg_m2',
+      role: 'user',
+      content: [{ type: 'media', media: { mediaType: 'image/webp', source: { type: 'base64', data: 'UklGR' } } }],
+    };
+    const unknown: OcMessage = {
+      id: 'msg_m3',
+      role: 'user',
+      content: [{ type: 'media', media: { source: { type: 'base64', data: 'not-a-signature' } } }],
+    };
+    const restored = restoreMessages([typed, unknown], []);
+    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: { mediaType?: string }; text?: string }>);
+    expect(parts[0]!.media?.mediaType).toBe('image/webp');
+    expect(parts[1]!.type).toBe('text');
+    expect(parts[1]!.text).toContain('unsupported media part');
+  });
 });
 
 describe('truncatedResultText', () => {
