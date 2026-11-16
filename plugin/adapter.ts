@@ -59,6 +59,29 @@ const MEDIA_MAGIC: Array<[prefix: string, mime: string]> = [
   ['JVBER', 'application/pdf'],
 ];
 
+/** The provider accepts base64, data URLs and http(s) URLs only — anything
+ * else (a file path, an empty string) makes every model call fail with
+ * provider.invalid-request. */
+const BASE64_PAYLOAD = /^[A-Za-z0-9+/=\r\n]{16,}$/;
+
+function mediaPayloadValid(media: {
+  source?: { type?: unknown; data?: unknown };
+  url?: unknown;
+}): boolean {
+  const urlForm = (value: string): boolean =>
+    value.startsWith('data:') || value.startsWith('http://') || value.startsWith('https://');
+  const source = media.source;
+  if (typeof source?.data === 'string' && source.data.length > 0) {
+    if (urlForm(source.data)) return true;
+    if (source.type === 'base64' && BASE64_PAYLOAD.test(source.data)) return true;
+  }
+  if (typeof media.url === 'string' && media.url.length > 0) {
+    if (urlForm(media.url)) return true;
+    if (BASE64_PAYLOAD.test(media.url)) return true;
+  }
+  return false;
+}
+
 function mediaMime(part: OcPart): string | undefined {
   const media = part.media as { mediaType?: unknown; source?: { type?: unknown; data?: unknown } } | undefined;
   if (typeof media?.mediaType === 'string' && media.mediaType) return media.mediaType;
@@ -72,14 +95,19 @@ function mediaMime(part: OcPart): string | undefined {
 }
 
 /** Core's request preparation calls startsWith on part.media.mediaType; a media part
- * without it (observed in compaction-hook messages) crashes every later model call. */
+ * without it (observed in compaction-hook messages) crashes every later model call.
+ * A part whose payload is a path or otherwise not base64/data-URL/http fails the
+ * provider request instead ("Media strings must be base64...") — same brick. */
 function normalizeMessage(message: OcMessage): OcMessage {
   const parts = partsOf(message);
   if (!parts.some((part) => part.type === 'media')) return message;
   const content = parts.map((part) => {
     if (part.type !== 'media') return part;
+    const media = part.media as { source?: { type?: unknown; data?: unknown }; url?: unknown } | undefined;
     const mime = mediaMime(part);
-    if (mime) return { ...part, media: { ...(part.media as object), mediaType: mime } };
+    if (mime && mediaPayloadValid(media ?? {})) {
+      return { ...part, media: { ...(part.media as object), mediaType: mime } };
+    }
     return { type: 'text', text: '[unsupported media part removed]' };
   });
   return { ...message, content };

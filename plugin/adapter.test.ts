@@ -116,7 +116,9 @@ describe('restoreMessages', () => {
       {
         id: 'msg_m1',
         role: 'user',
-        content: [{ type: 'media', filename: 'shot.png', media: { source: { type: 'base64', data: 'AAAA' } } }],
+        content: [
+          { type: 'media', filename: 'shot.png', media: { source: { type: 'base64', data: 'AAAAAAAAAAAAAAAA' } } },
+        ],
       },
     ];
     const restored = restoreMessages(stored, [userMsg]);
@@ -129,7 +131,7 @@ describe('restoreMessages', () => {
       {
         id: 'msg_m1b',
         role: 'user',
-        content: [{ type: 'media', media: { source: { type: 'base64', data: '/9j/4AAQ' } } }],
+        content: [{ type: 'media', media: { source: { type: 'base64', data: '/9j/4AAQSkZJRgABAQ' } } }],
       },
     ];
     const restored = restoreMessages(stored, []);
@@ -141,7 +143,9 @@ describe('restoreMessages', () => {
     const typed: OcMessage = {
       id: 'msg_m2',
       role: 'user',
-      content: [{ type: 'media', media: { mediaType: 'image/webp', source: { type: 'base64', data: 'UklGR' } } }],
+      content: [
+        { type: 'media', media: { mediaType: 'image/webp', source: { type: 'base64', data: 'UklGRhoAAABXRUJQVlA4' } } },
+      ],
     };
     const unknown: OcMessage = {
       id: 'msg_m3',
@@ -153,6 +157,58 @@ describe('restoreMessages', () => {
     expect(parts[0]!.media?.mediaType).toBe('image/webp');
     expect(parts[1]!.type).toBe('text');
     expect(parts[1]!.text).toContain('unsupported media part');
+  });
+
+  it('replaces media parts whose payload is a file path with a text part', () => {
+    const windows: OcMessage = {
+      id: 'msg_m4',
+      role: 'user',
+      content: [
+        { type: 'media', media: { mediaType: 'image/png', source: { type: 'base64', data: 'C:\\Users\\x\\shot.png' } } },
+      ],
+    };
+    const posix: OcMessage = {
+      id: 'msg_m5',
+      role: 'user',
+      content: [
+        { type: 'media', media: { mediaType: 'image/png', source: { type: 'base64', data: '/home/x/shot.png' } } },
+      ],
+    };
+    const driftedType: OcMessage = {
+      id: 'msg_m9',
+      role: 'user',
+      content: [
+        { type: 'media', media: { mediaType: 'image/png', source: { type: 'text', data: 'AAAAAAAAAAAAAAAA' } } },
+      ],
+    };
+    const restored = restoreMessages([windows, posix, driftedType], []);
+    const parts = restored.flatMap((message) => message.content as Array<{ type: string; text?: string }>);
+    expect(parts).toHaveLength(3);
+    expect(parts.every((p) => p.type === 'text' && p.text!.includes('unsupported media part'))).toBe(true);
+  });
+
+  it('keeps url-form media payloads (data URL and https)', () => {
+    const dataUrl: OcMessage = {
+      id: 'msg_m6',
+      role: 'user',
+      content: [{ type: 'media', media: { mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgoAAAANS' } }],
+    };
+    const http: OcMessage = {
+      id: 'msg_m7',
+      role: 'user',
+      content: [{ type: 'media', media: { mediaType: 'image/png', url: 'https://example.com/shot.png' } }],
+    };
+    const inData: OcMessage = {
+      id: 'msg_m8',
+      role: 'user',
+      content: [
+        { type: 'media', media: { mediaType: 'image/png', source: { type: 'base64', data: 'data:image/png;base64,iVBORw0KGgo' } } },
+      ],
+    };
+    const restored = restoreMessages([dataUrl, http, inData], []);
+    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: { mediaType?: string } }>);
+    expect(parts).toHaveLength(3);
+    expect(parts.every((p) => p.type === 'media' && p.media?.mediaType === 'image/png')).toBe(true);
   });
 });
 
