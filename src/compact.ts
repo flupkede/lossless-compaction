@@ -42,6 +42,8 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxQuestionsPerRequest: 12,
   askConcurrency: 2,
   duplicateKeepLast: 2,
+  targetReduction: 0.3,
+  pressureThresholdTokens: 100_000,
   sliceMap: false,
   truncateHeadChars: 300,
   trainingSource: 'live',
@@ -87,6 +89,14 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     duplicateKeepLast: Math.max(
       0,
       Math.floor(finite(options.duplicateKeepLast, DEFAULT_OPTIONS.duplicateKeepLast)),
+    ),
+    targetReduction: Math.min(
+      1,
+      Math.max(0, finite(options.targetReduction, DEFAULT_OPTIONS.targetReduction)),
+    ),
+    pressureThresholdTokens: Math.max(
+      0,
+      Math.floor(finite(options.pressureThresholdTokens, DEFAULT_OPTIONS.pressureThresholdTokens)),
     ),
     sliceMap: options.sliceMap === true,
     timeBudgetMs:
@@ -703,6 +713,26 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
+  // guaranteed reduction under pressure: past the threshold the target is
+  // derived mechanically so the result cannot depend on judge leniency
+  // (user requirement: >=30% gone when compaction fires near the window
+  // limit). An explicit targetTokens option always wins.
+  const beforeTokens = transcriptTokens(messages);
+  if (
+    resolved.targetTokens === undefined &&
+    resolved.targetReduction > 0 &&
+    resolved.pressureThresholdTokens > 0 &&
+    beforeTokens >= resolved.pressureThresholdTokens
+  ) {
+    resolved.targetTokens = Math.max(
+      1,
+      Math.floor(beforeTokens * (1 - resolved.targetReduction)),
+    );
+    resolved.preserveStartMessages = Math.max(
+      0,
+      Math.floor(finite(options.preserveStartMessages, DEFAULT_OPTIONS.preserveStartMessages)),
+    );
+  }
   const calls = collectToolCalls(
     messages,
     resolved.preserveRecentMessages,

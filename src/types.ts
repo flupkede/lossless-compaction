@@ -131,6 +131,17 @@ export interface CompactOptions {
    * prose, lowest score first). undefined keeps threshold-only behaviour.
    */
   targetTokens?: number;
+  /**
+   * Fraction of the transcript that must go when the pressure threshold is
+   * met: compaction then derives `targetTokens` mechanically, so the result
+   * cannot depend on judge leniency. Default 0.3 (>=30% reduction); 0 disables.
+   */
+  targetReduction?: number;
+  /**
+   * Transcript token estimate at which `targetReduction` kicks in
+   * (compaction usually fires near the window limit). Default 100000; 0 disables.
+   */
+  pressureThresholdTokens?: number;
   /** Estimated token ceiling for the state. Default 25000. */
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
@@ -201,6 +212,8 @@ export interface ResolvedCompactOptions {
   preserveRecentMessages: number;
   preserveStartMessages: number;
   targetTokens?: number;
+  targetReduction: number;
+  pressureThresholdTokens: number;
   maxStateTokens: number;
   maxRequestTokens: number;
   maxQuestionsPerRequest: number;

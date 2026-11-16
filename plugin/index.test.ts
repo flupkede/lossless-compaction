@@ -162,6 +162,9 @@ describe('fast-compaction plugin hooks', () => {
     await plugin.setup(ctx as never);
     compact.mockReturnValue({ stats, decisions: [], messageDecisions: [] });
     await hooks.compaction({ sessionID: 's9', messages: [] } as never);
+    // the deny counts calls strictly AFTER the compaction timestamp; without
+    // this pause both can land in the same millisecond and the deny vacates
+    await new Promise((resolve) => setTimeout(resolve, 2));
     await wrapped!({}, { sessionID: 's9' });
     await wrapped!({}, { sessionID: 's9' });
     expect(executed).toHaveBeenCalledTimes(2);

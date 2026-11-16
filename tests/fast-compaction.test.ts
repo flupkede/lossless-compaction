@@ -89,6 +89,8 @@ describe('options', () => {
       maxQuestionsPerRequest: 12,
       askConcurrency: 2,
       duplicateKeepLast: 2,
+      targetReduction: 0.3,
+      pressureThresholdTokens: 100_000,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({
@@ -111,6 +113,51 @@ describe('options', () => {
     });
     expect(resolveOptions({ askConcurrency: 0 })).toMatchObject({ askConcurrency: 1 });
     expect(resolveOptions({ duplicateKeepLast: -3 })).toMatchObject({ duplicateKeepLast: 0 });
+    expect(resolveOptions({ targetReduction: 5 })).toMatchObject({ targetReduction: 1 });
+    expect(resolveOptions({ targetReduction: -1 })).toMatchObject({ targetReduction: 0 });
+    expect(resolveOptions({ pressureThresholdTokens: 2.7 })).toMatchObject({
+      pressureThresholdTokens: 2,
+    });
+  });
+
+  it('derives the target under pressure; an explicit targetTokens wins', async () => {
+    const seen: Seen[] = [];
+    // result-heavy transcript with a keep-everything judge: without the
+    // derived target nothing would shrink, with it the reduction is forced
+    const heavy = (): Message[] => {
+      const body = 'x'.repeat(5000);
+      const out: Message[] = [message('user', 'Never edit anything under src/generated. Fix the failing test.')];
+      for (let i = 0; i < 10; i += 1) {
+        out.push(call(`t${i}`, 'Read', { file_path: `src/f${i}.ts` }, body), result(`t${i}`, body));
+      }
+      return out;
+    };
+    const res = await compact(heavy(), fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 0,
+      targetReduction: 0.7,
+      pressureThresholdTokens: 1,
+    });
+    expect(res.stats.budgetEvictions).toBeGreaterThan(0);
+    expect(1 - res.stats.charsAfter / res.stats.charsBefore).toBeGreaterThanOrEqual(0.6);
+    // the first-message anchor survives the mechanical eviction
+    expect(res.messages[0]?.text).toContain('Never edit anything under src/generated');
+    // explicit targetTokens takes precedence: no derived target
+    const explicit = await compact(heavy(), fakeJev(() => 0.9, seen), {
+      targetTokens: Number.MAX_SAFE_INTEGER,
+      targetReduction: 0.7,
+      pressureThresholdTokens: 1,
+    });
+    expect(explicit.stats.budgetEvictions).toBe(0);
+  });
+
+  it('leaves threshold-only compaction untouched below the pressure threshold', async () => {
+    const seen: Seen[] = [];
+    const res = await compact(transcript(), fakeJev(() => 0.9, seen), {
+      preserveRecentMessages: 0,
+      targetReduction: 0.7,
+      pressureThresholdTokens: 1_000_000,
+    });
+    expect(res.stats.budgetEvictions).toBe(0);
   });
 });
 
@@ -271,6 +318,10 @@ describe('duplicate message injections in compact', () => {
     expect(res.messageDecisions.some((d) => d.reason === 'duplicate' && !d.keep)).toBe(true);
     expect(res.messages.some((m) => m.text === checkpoint(1))).toBe(false);
     expect(res.messages.filter((m) => m.text.startsWith('<conversation-checkpoint>'))).toHaveLength(2);
+    // exactly one decision per message index, whichever branch produced it
+    const idx1 = res.messageDecisions.filter((d) => d.i === 1);
+    expect(idx1).toHaveLength(1);
+    expect(idx1[0]?.keep).toBe(false);
   });
 });
 
