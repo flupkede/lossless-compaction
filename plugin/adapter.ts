@@ -64,27 +64,17 @@ const MEDIA_MAGIC: Array<[prefix: string, mime: string]> = [
  * provider.invalid-request. */
 const BASE64_PAYLOAD = /^[A-Za-z0-9+/=\r\n]{16,}$/;
 
-function mediaPayloadValid(media: {
-  source?: { type?: unknown; data?: unknown };
-  url?: unknown;
-}): boolean {
-  const urlForm = (value: string): boolean =>
-    value.startsWith('data:') || value.startsWith('http://') || value.startsWith('https://');
-  const source = media.source;
-  if (typeof source?.data === 'string' && source.data.length > 0) {
-    if (urlForm(source.data)) return true;
-    if (source.type === 'base64' && BASE64_PAYLOAD.test(source.data)) return true;
-  }
-  if (typeof media.url === 'string' && media.url.length > 0) {
-    if (urlForm(media.url)) return true;
-    if (BASE64_PAYLOAD.test(media.url)) return true;
-  }
-  return false;
-}
+const MEDIA_URL_FORM = (value: string): boolean =>
+  value.startsWith('data:') || value.startsWith('http://') || value.startsWith('https://');
 
 function mediaMime(part: OcPart): string | undefined {
-  const media = part.media as { mediaType?: unknown; source?: { type?: unknown; data?: unknown } } | undefined;
+  const media = part.media as {
+    mediaType?: unknown;
+    source?: { type?: unknown; data?: unknown; url?: unknown; mediaType?: unknown };
+  } | undefined;
   if (typeof media?.mediaType === 'string' && media.mediaType) return media.mediaType;
+  // AssetEncoded JSON (the stored form of a real Asset) keeps mediaType inside source.
+  if (typeof media?.source?.mediaType === 'string' && media.source.mediaType) return media.source.mediaType;
   const name = typeof part.filename === 'string' ? part.filename : '';
   const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
   if (MEDIA_MIME_BY_EXT[ext]) return MEDIA_MIME_BY_EXT[ext];
@@ -94,20 +84,60 @@ function mediaMime(part: OcPart): string | undefined {
   return undefined;
 }
 
+/** Reduces a media part to the string form opencode's request builder accepts
+ * (data URL or http(s) URL), or undefined when the payload is unusable.
+ * Since v2.2.6, Message.make -> Media.make accepts only real Asset instances,
+ * plain strings or bytes — a plain object throws "Media strings must be base64"
+ * on every later model call. Spreading an Asset to add a mediaType destroys the
+ * class identity, so media must leave this plugin as a string: core then builds
+ * the Asset itself, and the form survives JSON storage idempotently. */
+function mediaToString(part: OcPart): string | undefined {
+  const media = part.media;
+  if (typeof media === 'string') {
+    if (MEDIA_URL_FORM(media)) return media;
+    const mime = mediaMime(part);
+    if (mime && BASE64_PAYLOAD.test(media)) return `data:${mime};base64,${media}`;
+    return undefined;
+  }
+  if (media === null || typeof media !== 'object') return undefined;
+  const record = media as { url?: unknown; source?: { type?: unknown; data?: unknown; url?: unknown } };
+  if (typeof record.url === 'string' && record.url.length > 0) {
+    if (MEDIA_URL_FORM(record.url)) return record.url;
+    const mime = mediaMime(part);
+    if (mime && BASE64_PAYLOAD.test(record.url)) return `data:${mime};base64,${record.url}`;
+    return undefined;
+  }
+  const source = record.source;
+  if (source === null || typeof source !== 'object') return undefined;
+  const data = source.data;
+  if (typeof data === 'string' && data.length > 0) {
+    if (MEDIA_URL_FORM(data)) return data;
+    const mime = mediaMime(part);
+    if (source.type === 'base64' && mime && BASE64_PAYLOAD.test(data)) return `data:${mime};base64,${data}`;
+    return undefined;
+  }
+  // url-source assets keep the URL inside source (AssetEncoded JSON).
+  if (typeof source.url === 'string' && source.url.length > 0) {
+    return MEDIA_URL_FORM(source.url) ? source.url : undefined;
+  }
+  if (source.type === 'bytes' && data instanceof Uint8Array) {
+    const mime = mediaMime(part);
+    if (mime) return `data:${mime};base64,${Buffer.from(data).toString('base64')}`;
+  }
+  return undefined;
+}
+
 /** Core's request preparation calls startsWith on part.media.mediaType; a media part
  * without it (observed in compaction-hook messages) crashes every later model call.
- * A part whose payload is a path or otherwise not base64/data-URL/http fails the
- * provider request instead ("Media strings must be base64...") — same brick. */
+ * Media parts therefore leave normalizeMessage only as a string form core can turn
+ * into a real Asset, or as a text placeholder. */
 function normalizeMessage(message: OcMessage): OcMessage {
   const parts = partsOf(message);
   if (!parts.some((part) => part.type === 'media')) return message;
   const content = parts.map((part) => {
     if (part.type !== 'media') return part;
-    const media = part.media as { source?: { type?: unknown; data?: unknown }; url?: unknown } | undefined;
-    const mime = mediaMime(part);
-    if (mime && mediaPayloadValid(media ?? {})) {
-      return { ...part, media: { ...(part.media as object), mediaType: mime } };
-    }
+    const media = mediaToString(part);
+    if (media) return { type: 'media', media, filename: part.filename };
     return { type: 'text', text: '[unsupported media part removed]' };
   });
   return { ...message, content };

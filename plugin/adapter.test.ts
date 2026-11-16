@@ -122,8 +122,9 @@ describe('restoreMessages', () => {
       },
     ];
     const restored = restoreMessages(stored, [userMsg]);
-    const part = (restored[0]!.content as Array<{ type: string; media?: { mediaType?: string } }>)[0]!;
-    expect(part.media?.mediaType).toBe('image/png');
+    const part = (restored[0]!.content as Array<{ type: string; media?: unknown; filename?: string }>)[0]!;
+    expect(part.media).toBe('data:image/png;base64,AAAAAAAAAAAAAAAA');
+    expect(part.filename).toBe('shot.png');
   });
 
   it('sniffs mediaType from base64 magic when no filename extension helps', () => {
@@ -135,8 +136,8 @@ describe('restoreMessages', () => {
       },
     ];
     const restored = restoreMessages(stored, []);
-    const part = (restored[0]!.content as Array<{ type: string; media?: { mediaType?: string } }>)[0]!;
-    expect(part.media?.mediaType).toBe('image/jpeg');
+    const part = (restored[0]!.content as Array<{ type: string; media?: unknown }>)[0]!;
+    expect(part.media).toBe('data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ');
   });
 
   it('keeps an existing mediaType and falls back to a text part when none can be derived', () => {
@@ -153,8 +154,8 @@ describe('restoreMessages', () => {
       content: [{ type: 'media', media: { source: { type: 'base64', data: 'not-a-signature' } } }],
     };
     const restored = restoreMessages([typed, unknown], []);
-    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: { mediaType?: string }; text?: string }>);
-    expect(parts[0]!.media?.mediaType).toBe('image/webp');
+    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: unknown; text?: string }>);
+    expect(parts[0]!.media).toBe('data:image/webp;base64,UklGRhoAAABXRUJQVlA4');
     expect(parts[1]!.type).toBe('text');
     expect(parts[1]!.text).toContain('unsupported media part');
   });
@@ -187,7 +188,7 @@ describe('restoreMessages', () => {
     expect(parts.every((p) => p.type === 'text' && p.text!.includes('unsupported media part'))).toBe(true);
   });
 
-  it('keeps url-form media payloads (data URL and https)', () => {
+  it('keeps url-form media payloads (data URL and https) as strings', () => {
     const dataUrl: OcMessage = {
       id: 'msg_m6',
       role: 'user',
@@ -206,9 +207,67 @@ describe('restoreMessages', () => {
       ],
     };
     const restored = restoreMessages([dataUrl, http, inData], []);
-    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: { mediaType?: string } }>);
+    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: unknown }>);
     expect(parts).toHaveLength(3);
-    expect(parts.every((p) => p.type === 'media' && p.media?.mediaType === 'image/png')).toBe(true);
+    expect(parts[0]!.media).toBe('data:image/png;base64,iVBORw0KGgoAAAANS');
+    expect(parts[1]!.media).toBe('https://example.com/shot.png');
+    expect(parts[2]!.media).toBe('data:image/png;base64,iVBORw0KGgo');
+  });
+
+  it('rebuilds a real Asset instance (v2.2.6+ live shape) into the data-URL string form', () => {
+    // opencode hands the hook media parts whose media is a Media.Asset class
+    // instance; spreading it into a plain object is what bricked sessions.
+    class FakeAsset {
+      source = { type: 'base64' as const, data: 'iVBORw0KGgoAAAANS' };
+      mediaType = 'image/png';
+      kind = 'image';
+    }
+    const live: OcMessage = {
+      id: 'msg_asset',
+      role: 'user',
+      content: [{ type: 'media', media: new FakeAsset(), filename: 'shot.png' }],
+    };
+    const restored = restoreMessages([live], []);
+    const part = (restored[0]!.content as Array<{ type: string; media?: unknown; filename?: string }>)[0]!;
+    expect(part.media).toBe('data:image/png;base64,iVBORw0KGgoAAAANS');
+    expect(part.filename).toBe('shot.png');
+  });
+
+  it('heals a stored spread-Asset plain object into the string form', () => {
+    // The exact shape stored into the plugin ledger by the pre-fix plugin.
+    const mangled: OcMessage = {
+      id: 'msg_mangle',
+      role: 'user',
+      content: [
+        {
+          type: 'media',
+          media: { source: { type: 'base64', data: 'iVBORw0KGgoAAAANS' }, mediaType: 'image/png', kind: 'image' },
+        },
+      ],
+    };
+    const once = restoreMessages([mangled], []);
+    const twice = restoreMessages(once, []);
+    const part = (twice[0]!.content as Array<{ type: string; media?: unknown }>)[0]!;
+    expect(part.media).toBe('data:image/png;base64,iVBORw0KGgoAAAANS');
+    expect(twice).toEqual(once);
+  });
+
+  it('heals the canonical AssetEncoded JSON shape (mediaType and url inside source)', () => {
+    // Asset.toJSON keeps mediaType inside source and has no top-level mediaType.
+    const storedAsset: OcMessage = {
+      id: 'msg_encoded',
+      role: 'user',
+      content: [{ type: 'media', media: { source: { type: 'base64', data: 'UklGRhoAAABXRUJQVlA4', mediaType: 'image/webp' } } }],
+    };
+    const storedUrl: OcMessage = {
+      id: 'msg_encoded_url',
+      role: 'user',
+      content: [{ type: 'media', media: { source: { type: 'url', url: 'https://example.com/shot.webp' } } }],
+    };
+    const restored = restoreMessages([storedAsset, storedUrl], []);
+    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: unknown }>);
+    expect(parts[0]!.media).toBe('data:image/webp;base64,UklGRhoAAABXRUJQVlA4');
+    expect(parts[1]!.media).toBe('https://example.com/shot.webp');
   });
 });
 
