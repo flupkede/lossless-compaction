@@ -231,6 +231,66 @@ export function duplicateCallIds(calls: readonly ToolCall[], keepLast: number): 
   return duplicates;
 }
 
+/** Prefix length that identifies a repeated injection: instruction notices,
+ * conversation checkpoints and catalog updates open with a verbatim head. */
+const DUPLICATE_MESSAGE_PREFIX_CHARS = 120;
+
+/** Prose below this is too cheap to dedup and too generic to key safely. */
+const DUPLICATE_MESSAGE_MIN_CHARS = 200;
+
+/**
+ * Indices of prose-only messages that repeat an earlier message's opening:
+ * host injections (instruction notices, conversation checkpoints, catalog
+ * updates) arrive with a verbatim shared head, and only the newest
+ * `duplicateKeepLast` of each distinct head survive. User prose is never
+ * judged, so without this a compaction checkpoint repeats forever
+ * (observed live: 17 checkpoints holding 69% of a session's characters).
+ * Pinned messages and prose carrying tool calls are never marked. 0 disables.
+ */
+export function duplicateMessageIndices(
+  messages: readonly Message[],
+  preserveRecentMessages: number,
+  preserveStartMessages: number,
+  keepLast: number,
+): Set<number> {
+  const duplicates = new Set<number>();
+  if (keepLast <= 0) return duplicates;
+  const proseOnly = (message: Message): boolean => {
+    const normalized = message.text.replace(/\s+/g, ' ').trim();
+    return (
+      normalized.length >= DUPLICATE_MESSAGE_MIN_CHARS &&
+      message.toolUses.length === 0 &&
+      (message.toolResults ?? []).length === 0
+    );
+  };
+  const keyOf = (message: Message): string => {
+    const normalized = message.text.replace(/\s+/g, ' ').trim();
+    return `${message.role}\u0000${normalized.slice(0, DUPLICATE_MESSAGE_PREFIX_CHARS)}`;
+  };
+  // pinned occurrences count toward the total but are never marked, so the
+  // kept-newest window stays honest (same rule as duplicateCallIds)
+  const totals = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (!proseOnly(message)) return;
+    const key = keyOf(message);
+    totals.set(key, (totals.get(key) ?? 0) + 1);
+  });
+  const nth = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (!proseOnly(message)) return;
+    const key = keyOf(message);
+    const n = (nth.get(key) ?? 0) + 1;
+    nth.set(key, n);
+    if (
+      !isPinned(index, messages.length, preserveRecentMessages, preserveStartMessages) &&
+      n <= (totals.get(key) ?? 0) - keepLast
+    ) {
+      duplicates.add(index);
+    }
+  });
+  return duplicates;
+}
+
 /** Question-token cost of one `msg_<i>` question (constant instructions). */
 const MESSAGE_QUESTION_TOKENS = 64;
 
@@ -652,6 +712,13 @@ export async function compact(
   const candidates = calls.filter((call) => !call.pinned);
   // mechanical pre-filter: identical repeats never reach the judge
   const duplicates = duplicateCallIds(calls, resolved.duplicateKeepLast);
+  // same for repeated host injections (checkpoints, instruction notices)
+  const duplicateMessages = duplicateMessageIndices(
+    messages,
+    resolved.preserveRecentMessages,
+    resolved.preserveStartMessages,
+    resolved.duplicateKeepLast,
+  );
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
   let fitted: FittedState | undefined;
@@ -875,6 +942,24 @@ export async function compact(
       resolved,
     ),
   );
+  // repeated injections were never asked (user prose is unjudgeable):
+  // force the drop on the decision if one exists, else append it
+  for (const index of duplicateMessages) {
+    const message = messages[index]!;
+    const existing = messageDecisions.find((decision) => decision.i === index);
+    if (existing) {
+      existing.keep = false;
+      existing.reason = 'duplicate';
+    } else {
+      messageDecisions.push({
+        i: index,
+        role: message.role === 'assistant' ? 'assistant' : 'user',
+        chars: message.text.length,
+        keep: false,
+        reason: 'duplicate',
+      });
+    }
+  }
   const budgetEvictions =
     resolved.targetTokens === undefined
       ? 0
@@ -943,8 +1028,11 @@ export async function compact(
       callsDropped: count(decisions, 'call_dropped'),
       pinned: count(decisions, 'pinned'),
       /** Prose entries judged droppable and removed. */
-      messagesDropped: messageDecisions.filter((d) => d.reason === 'dropped').length,
+      messagesDropped: messageDecisions.filter(
+        (d) => d.reason === 'dropped' || d.reason === 'duplicate',
+      ).length,
       duplicates: duplicates.size,
+      messageDuplicates: duplicateMessages.size,
       budgetEvictions,
       stateTokens: runStateTokens,
       stateStage: runStage,

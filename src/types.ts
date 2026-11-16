@@ -234,6 +234,8 @@ export interface CompactResult {
     messagesDropped: number;
     /** Older identical repeats dropped without judging; 0 when off. */
     duplicates: number;
+    /** Older repeated-injection prose messages dropped without judging. */
+    messageDuplicates: number;
     /** Entries demoted by the token budget (calls + prose); 0 without `targetTokens`. */
     budgetEvictions: number;
     stateTokens: number;
@@ -299,7 +301,7 @@ export interface MessageDecision {
   /** Characters of prose the entry carried when judged. */
   chars: number;
   keep: boolean;
-  reason: 'kept' | 'dropped' | 'recent' | 'budget' | 'user';
+  reason: 'kept' | 'dropped' | 'recent' | 'budget' | 'user' | 'duplicate';
 }
 
 /** The `state` of a Jev request: a string or any JSON-serialisable object. */

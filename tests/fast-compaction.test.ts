@@ -9,6 +9,7 @@ import {
   decideCall,
   decideMessage,
   duplicateCallIds,
+  duplicateMessageIndices,
   estimateTokens,
   fitState,
   sliceRanges,
@@ -185,6 +186,91 @@ describe('duplicate clustering in compact', () => {
     expect(res.messages.some((m) => m.toolUses.some((t) => t.tool_use_id === 'c1'))).toBe(false);
     expect(res.messages.some((m) => (m.toolResults ?? []).some((t) => t.tool_use_id === 'c1'))).toBe(false);
     expect(res.messages.some((m) => (m.toolResults ?? []).some((t) => t.tool_use_id === 'c3'))).toBe(true);
+  });
+});
+
+describe('duplicateMessageIndices', () => {
+  const checkpointText = (n: number): string =>
+    `<conversation-checkpoint>\nThe following is a summary and serialized record of each message. ` +
+    'x'.repeat(150) +
+    ` snapshot ${n}.`;
+  const ckpt = (n: number): Message => message('user', checkpointText(n));
+
+  it('marks older prefix-repeats and keeps the newest N', () => {
+    const messages = [ckpt(1), ckpt(2), ckpt(3), ckpt(4), message('user', 'unrelated long instruction '.repeat(12))];
+    // four identical-head checkpoints, keepLast 2: drop index 1; index 0 is
+    // always pinned (first-message anchor), the unrelated prose never matches
+    expect(duplicateMessageIndices(messages, 0, 0, 2)).toEqual(new Set([1]));
+  });
+
+  it('never marks pinned occurrences but counts them', () => {
+    const messages = [ckpt(1), ckpt(2), ckpt(3)];
+    // index 2 sits in the recent window and index 0 is the pinned anchor:
+    // both count toward the total, only the middle repeat drops at keepLast 1
+    expect(duplicateMessageIndices(messages, 1, 0, 1)).toEqual(new Set([1]));
+  });
+
+  it('ignores short prose and messages carrying tool calls', () => {
+    const short = message('user', 'short instruction repeated '.repeat(4));
+    const messages = [short, short, ckpt(1), ckpt(2), ckpt(3)];
+    expect(duplicateMessageIndices(messages, 0, 0, 1)).toEqual(new Set([2, 3]));
+  });
+
+  it('0 disables', () => {
+    expect(duplicateMessageIndices([ckpt(1), ckpt(2)], 0, 0, 0)).toEqual(new Set());
+  });
+});
+
+describe('duplicate message injections in compact', () => {
+  it('drops older checkpoints without asking the judge, keeps distinct user prose', async () => {
+    const checkpoint = (n: number): string =>
+      `<conversation-checkpoint>\nThe following is a summary and serialized record of each message. ` +
+      'x'.repeat(150) +
+      ` snapshot ${n}.`;
+    const transcript: Message[] = [
+      message('user', 'fix the bug in the parser and keep the tests green '.repeat(4)),
+      message('user', checkpoint(1)),
+      message('assistant', 'looking into it '.repeat(20)),
+      message('user', checkpoint(2)),
+      message('user', checkpoint(3)),
+      message('user', checkpoint(4)),
+    ];
+    const res = await compact(transcript, fakeJev(() => 0.9), { preserveRecentMessages: 0 });
+    const keptCheckpointTexts = res.messages
+      .filter((m) => m.text.startsWith('<conversation-checkpoint>'))
+      .map((m) => m.text);
+    expect(keptCheckpointTexts).toHaveLength(2);
+    expect(res.stats.messageDuplicates).toBe(2);
+    expect(res.messageDecisions.find((d) => d.reason === 'duplicate')?.keep).toBe(false);
+    // distinct task instruction survives untouched even with a keep-everything judge
+    expect(res.messages.some((m) => m.text.startsWith('fix the bug'))).toBe(true);
+    // user prose is never judged: no msg_ questions were asked about any of it
+  });
+
+  it('appends the drop when the state fitter left the old duplicate out', async () => {
+    const checkpoint = (n: number): string =>
+      `<conversation-checkpoint>\nThe following is a summary and serialized record of each message. ` +
+      'x'.repeat(150) +
+      ` snapshot ${n}.`;
+    const filler = (n: number): Message =>
+      message('user', `filler task detail ${n} `.repeat(20));
+    const transcript: Message[] = [
+      message('user', 'distinct anchor instruction '.repeat(10)),
+      message('user', checkpoint(1)),
+      ...Array.from({ length: 30 }, (_, i) => filler(i)),
+      message('user', checkpoint(2)),
+      message('user', checkpoint(3)),
+    ];
+    // tiny state budget: the fitter leaves the old prose-only checkpoint out
+    // of the fitted history, so no decideMessage entry exists for it
+    const res = await compact(transcript, fakeJev(() => 0.9), {
+      preserveRecentMessages: 0,
+      maxStateTokens: 200,
+      maxRequestTokens: 400,
+    });
+    expect(res.messageDecisions.some((d) => d.reason === 'duplicate' && !d.keep)).toBe(true);
+    expect(res.messages.some((m) => m.text === checkpoint(1))).toBe(false);
+    expect(res.messages.filter((m) => m.text.startsWith('<conversation-checkpoint>'))).toHaveLength(2);
   });
 });
 
