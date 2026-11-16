@@ -18,6 +18,7 @@ Repo instruction doc. Vendor-named variants (`CLAUDE.md`) mean the same.
 
 ## Shipping discipline
 
+- Opencode plugin: the plugin's import target is this repo's `node_modules` — a disk-cleanup that removes it makes every newly started opencode silently load WITHOUT compaction hooks ("everything stays"); running processes keep the old in-memory copy, so the ledger looks alive. First check on "compaction does nothing": `node_modules` exists, then restart opencode (plugins load once per process).
 - Defaults ship only when proven harmless in a live e2e (ledger/shim numbers), not just unit tests. Prefer effect-based guards over raw counters — the 0.7.7 raw call-count limiter blocked a normal 35-call commit.
 - Hosts own the thresholds: in Zed/ACP the HOST initiates compaction and the plugin only intercepts (`compactAtPercent` governs the plugin's own auto path only; `$.session.compact` is refused in SDK mode). The fixed per-request block (system prompt + tool schemas) must stay well under the compaction trigger — when it exceeds the trigger, context can never drop below it and the plugin re-fires every turn (the Oct-21 treadmill: 122.5k fixed block vs 120k trigger).
 - One reload per release; after shipping, measure the first real compaction in the ledger (ms/requests/ratio) instead of trusting the diff.
