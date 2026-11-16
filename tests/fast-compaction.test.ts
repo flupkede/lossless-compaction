@@ -90,7 +90,7 @@ describe('options', () => {
       askConcurrency: 2,
       duplicateKeepLast: 2,
       targetReduction: 0.3,
-      pressureThresholdTokens: 100_000,
+      pressureThresholdTokens: 15_000,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({

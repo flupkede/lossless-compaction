@@ -139,7 +139,9 @@ export interface CompactOptions {
   targetReduction?: number;
   /**
    * Transcript token estimate at which `targetReduction` kicks in
-   * (compaction usually fires near the window limit). Default 100000; 0 disables.
+   * (compaction usually fires near the window limit). Default 15000 — the
+   * host adds system prompt and tool schemas on top, so the transcript-only
+   * estimate underestimates pressure; 0 disables.
    */
   pressureThresholdTokens?: number;
   /** Estimated token ceiling for the state. Default 25000. */

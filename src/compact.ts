@@ -43,7 +43,11 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   askConcurrency: 2,
   duplicateKeepLast: 2,
   targetReduction: 0.3,
-  pressureThresholdTokens: 100_000,
+  // compaction near a window limit implies a transcript far above this; the
+  // host context adds system prompt + tool schemas on top, so the transcript
+  // alone underestimates pressure (observed: ~95k-token transcript at a
+  // 190k/200k window). Below it a session is not under real pressure.
+  pressureThresholdTokens: 15_000,
   sliceMap: false,
   truncateHeadChars: 300,
   trainingSource: 'live',
