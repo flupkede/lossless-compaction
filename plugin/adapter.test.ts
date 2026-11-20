@@ -16,6 +16,12 @@ const userMsg: OcMessage = {
   role: 'user',
   content: [{ type: 'text', text: 'read the config' }],
 };
+// The canonical stored form of a pasted image (Asset.toJSON shape).
+const mediaPart = {
+  type: 'media',
+  media: { source: { type: 'base64', data: 'iVBORw0KGgoAAAANS', mediaType: 'image/png' } },
+  filename: 'pasted-image',
+};
 const assistantCall: OcMessage = {
   id: 'msg_a1',
   role: 'assistant',
@@ -111,163 +117,50 @@ describe('restoreMessages', () => {
     expect(isMarkerSummary(userMsg)).toBe(false);
   });
 
-  it('derives mediaType from the filename extension when the data is not sniffable', () => {
+  it('revives stored media parts from the matching live message', () => {
+    const liveMediaPart = { type: 'media', media: { asset: true }, filename: 'pasted-image' };
     const stored: OcMessage[] = [
-      {
-        id: 'msg_m1',
-        role: 'user',
-        content: [
-          { type: 'media', filename: 'shot.png', media: { source: { type: 'base64', data: 'AAAAAAAAAAAAAAAA' } } },
-        ],
-      },
+      { id: 'msg_img', role: 'user', content: [{ type: 'text', text: 'look' }, { ...mediaPart }] },
     ];
-    const restored = restoreMessages(stored, [userMsg]);
-    const part = (restored[0]!.content as Array<{ type: string; media?: unknown; filename?: string }>)[0]!;
-    expect(part.media).toBe('data:image/png;base64,AAAAAAAAAAAAAAAA');
-    expect(part.filename).toBe('shot.png');
+    const live: OcMessage = { id: 'msg_img', role: 'user', content: [{ type: 'text', text: 'look' }, liveMediaPart] };
+    const restored = restoreMessages(stored, [live, userMsg]);
+    const part = (restored[0]!.content as Array<{ type: string }>)[1]!;
+    expect(part).toBe(liveMediaPart);
   });
 
-  it('sniffs mediaType from base64 magic when no filename extension helps', () => {
-    const stored: OcMessage[] = [
-      {
-        id: 'msg_m1b',
-        role: 'user',
-        content: [{ type: 'media', media: { source: { type: 'base64', data: '/9j/4AAQSkZJRgABAQ' } } }],
-      },
-    ];
+  it('degrades stored media without a live counterpart to a text note', () => {
+    const stored: OcMessage[] = [{ id: 'msg_img2', role: 'user', content: [{ ...mediaPart }] }];
     const restored = restoreMessages(stored, []);
-    const part = (restored[0]!.content as Array<{ type: string; media?: unknown }>)[0]!;
-    expect(part.media).toBe('data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ');
+    const part = (restored[0]!.content as Array<{ type: string; text?: string }>)[0]!;
+    expect(part.type).toBe('text');
+    expect(part.text).toBe('[attachment omitted: pasted-image]');
   });
 
-  it('keeps an existing mediaType and falls back to a text part when none can be derived', () => {
-    const typed: OcMessage = {
-      id: 'msg_m2',
-      role: 'user',
-      content: [
-        { type: 'media', media: { mediaType: 'image/webp', source: { type: 'base64', data: 'UklGRhoAAABXRUJQVlA4' } } },
-      ],
-    };
-    const unknown: OcMessage = {
-      id: 'msg_m3',
-      role: 'user',
-      content: [{ type: 'media', media: { source: { type: 'base64', data: 'not-a-signature' } } }],
-    };
-    const restored = restoreMessages([typed, unknown], []);
-    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: unknown; text?: string }>);
-    expect(parts[0]!.media).toBe('data:image/webp;base64,UklGRhoAAABXRUJQVlA4');
+  it('passes tail messages through by reference untouched', () => {
+    const restored = restoreMessages([], [userMsg]);
+    expect(restored).toHaveLength(1);
+    expect(restored[0]).toBe(userMsg);
+  });
+
+  it('falls back to the text note when live has fewer media parts', () => {
+    const liveMediaPart = { type: 'media', media: { asset: true }, filename: 'a.png' };
+    const stored: OcMessage[] = [
+      { id: 'msg_img3', role: 'user', content: [{ ...mediaPart }, { ...mediaPart, filename: 'b.png' }] },
+    ];
+    const live: OcMessage = { id: 'msg_img3', role: 'user', content: [liveMediaPart] };
+    const restored = restoreMessages(stored, [live]);
+    const parts = restored[0]!.content as Array<{ type: string; text?: string }>;
+    expect(parts[0]).toBe(liveMediaPart);
     expect(parts[1]!.type).toBe('text');
-    expect(parts[1]!.text).toContain('unsupported media part');
+    expect(parts[1]!.text).toBe('[attachment omitted: b.png]');
   });
 
-  it('replaces media parts whose payload is a file path with a text part', () => {
-    const windows: OcMessage = {
-      id: 'msg_m4',
-      role: 'user',
-      content: [
-        { type: 'media', media: { mediaType: 'image/png', source: { type: 'base64', data: 'C:\\Users\\x\\shot.png' } } },
-      ],
-    };
-    const posix: OcMessage = {
-      id: 'msg_m5',
-      role: 'user',
-      content: [
-        { type: 'media', media: { mediaType: 'image/png', source: { type: 'base64', data: '/home/x/shot.png' } } },
-      ],
-    };
-    const driftedType: OcMessage = {
-      id: 'msg_m9',
-      role: 'user',
-      content: [
-        { type: 'media', media: { mediaType: 'image/png', source: { type: 'text', data: 'AAAAAAAAAAAAAAAA' } } },
-      ],
-    };
-    const restored = restoreMessages([windows, posix, driftedType], []);
-    const parts = restored.flatMap((message) => message.content as Array<{ type: string; text?: string }>);
-    expect(parts).toHaveLength(3);
-    expect(parts.every((p) => p.type === 'text' && p.text!.includes('unsupported media part'))).toBe(true);
-  });
-
-  it('keeps url-form media payloads (data URL and https) as strings', () => {
-    const dataUrl: OcMessage = {
-      id: 'msg_m6',
-      role: 'user',
-      content: [{ type: 'media', media: { mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgoAAAANS' } }],
-    };
-    const http: OcMessage = {
-      id: 'msg_m7',
-      role: 'user',
-      content: [{ type: 'media', media: { mediaType: 'image/png', url: 'https://example.com/shot.png' } }],
-    };
-    const inData: OcMessage = {
-      id: 'msg_m8',
-      role: 'user',
-      content: [
-        { type: 'media', media: { mediaType: 'image/png', source: { type: 'base64', data: 'data:image/png;base64,iVBORw0KGgo' } } },
-      ],
-    };
-    const restored = restoreMessages([dataUrl, http, inData], []);
-    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: unknown }>);
-    expect(parts).toHaveLength(3);
-    expect(parts[0]!.media).toBe('data:image/png;base64,iVBORw0KGgoAAAANS');
-    expect(parts[1]!.media).toBe('https://example.com/shot.png');
-    expect(parts[2]!.media).toBe('data:image/png;base64,iVBORw0KGgo');
-  });
-
-  it('rebuilds a real Asset instance (v2.2.6+ live shape) into the data-URL string form', () => {
-    // opencode hands the hook media parts whose media is a Media.Asset class
-    // instance; spreading it into a plain object is what bricked sessions.
-    class FakeAsset {
-      source = { type: 'base64' as const, data: 'iVBORw0KGgoAAAANS' };
-      mediaType = 'image/png';
-      kind = 'image';
-    }
-    const live: OcMessage = {
-      id: 'msg_asset',
-      role: 'user',
-      content: [{ type: 'media', media: new FakeAsset(), filename: 'shot.png' }],
-    };
-    const restored = restoreMessages([live], []);
-    const part = (restored[0]!.content as Array<{ type: string; media?: unknown; filename?: string }>)[0]!;
-    expect(part.media).toBe('data:image/png;base64,iVBORw0KGgoAAAANS');
-    expect(part.filename).toBe('shot.png');
-  });
-
-  it('heals a stored spread-Asset plain object into the string form', () => {
-    // The exact shape stored into the plugin ledger by the pre-fix plugin.
-    const mangled: OcMessage = {
-      id: 'msg_mangle',
-      role: 'user',
-      content: [
-        {
-          type: 'media',
-          media: { source: { type: 'base64', data: 'iVBORw0KGgoAAAANS' }, mediaType: 'image/png', kind: 'image' },
-        },
-      ],
-    };
-    const once = restoreMessages([mangled], []);
-    const twice = restoreMessages(once, []);
-    const part = (twice[0]!.content as Array<{ type: string; media?: unknown }>)[0]!;
-    expect(part.media).toBe('data:image/png;base64,iVBORw0KGgoAAAANS');
-    expect(twice).toEqual(once);
-  });
-
-  it('heals the canonical AssetEncoded JSON shape (mediaType and url inside source)', () => {
-    // Asset.toJSON keeps mediaType inside source and has no top-level mediaType.
-    const storedAsset: OcMessage = {
-      id: 'msg_encoded',
-      role: 'user',
-      content: [{ type: 'media', media: { source: { type: 'base64', data: 'UklGRhoAAABXRUJQVlA4', mediaType: 'image/webp' } } }],
-    };
-    const storedUrl: OcMessage = {
-      id: 'msg_encoded_url',
-      role: 'user',
-      content: [{ type: 'media', media: { source: { type: 'url', url: 'https://example.com/shot.webp' } } }],
-    };
-    const restored = restoreMessages([storedAsset, storedUrl], []);
-    const parts = restored.flatMap((message) => message.content as Array<{ type: string; media?: unknown }>);
-    expect(parts[0]!.media).toBe('data:image/webp;base64,UklGRhoAAABXRUJQVlA4');
-    expect(parts[1]!.media).toBe('https://example.com/shot.webp');
+  it('converges: text notes survive a second restore unchanged', () => {
+    const stored: OcMessage[] = [
+      { id: 'msg_img2', role: 'user', content: [{ type: 'text', text: '[attachment omitted: pasted-image]' }] },
+    ];
+    const once = restoreMessages(stored, []);
+    expect(restoreMessages(once, [])).toEqual(once);
   });
 });
 

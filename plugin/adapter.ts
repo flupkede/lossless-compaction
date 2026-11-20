@@ -42,103 +42,25 @@ function resultValue(part: OcPart): string {
   return value === undefined ? '' : JSON.stringify(value);
 }
 
-const MEDIA_MIME_BY_EXT: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  pdf: 'application/pdf',
-};
-
-/** Base64 magic prefixes for unambiguous file signatures. */
-const MEDIA_MAGIC: Array<[prefix: string, mime: string]> = [
-  ['iVBOR', 'image/png'],
-  ['/9j/', 'image/jpeg'],
-  ['R0lGOD', 'image/gif'],
-  ['JVBER', 'application/pdf'],
-];
-
-/** The provider accepts base64, data URLs and http(s) URLs only — anything
- * else (a file path, an empty string) makes every model call fail with
- * provider.invalid-request. */
-const BASE64_PAYLOAD = /^[A-Za-z0-9+/=\r\n]{16,}$/;
-
-const MEDIA_URL_FORM = (value: string): boolean =>
-  value.startsWith('data:') || value.startsWith('http://') || value.startsWith('https://');
-
-function mediaMime(part: OcPart): string | undefined {
-  const media = part.media as {
-    mediaType?: unknown;
-    source?: { type?: unknown; data?: unknown; url?: unknown; mediaType?: unknown };
-  } | undefined;
-  if (typeof media?.mediaType === 'string' && media.mediaType) return media.mediaType;
-  // AssetEncoded JSON (the stored form of a real Asset) keeps mediaType inside source.
-  if (typeof media?.source?.mediaType === 'string' && media.source.mediaType) return media.source.mediaType;
-  const name = typeof part.filename === 'string' ? part.filename : '';
-  const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
-  if (MEDIA_MIME_BY_EXT[ext]) return MEDIA_MIME_BY_EXT[ext];
-  if (media?.source?.type === 'base64' && typeof media.source.data === 'string') {
-    for (const [magic, mime] of MEDIA_MAGIC) if (media.source.data.startsWith(magic)) return mime;
-  }
-  return undefined;
-}
-
-/** Reduces a media part to the string form opencode's request builder accepts
- * (data URL or http(s) URL), or undefined when the payload is unusable.
- * Since v2.2.6, Message.make -> Media.make accepts only real Asset instances,
- * plain strings or bytes — a plain object throws "Media strings must be base64"
- * on every later model call. Spreading an Asset to add a mediaType destroys the
- * class identity, so media must leave this plugin as a string: core then builds
- * the Asset itself, and the form survives JSON storage idempotently. */
-function mediaToString(part: OcPart): string | undefined {
-  const media = part.media;
-  if (typeof media === 'string') {
-    if (MEDIA_URL_FORM(media)) return media;
-    const mime = mediaMime(part);
-    if (mime && BASE64_PAYLOAD.test(media)) return `data:${mime};base64,${media}`;
-    return undefined;
-  }
-  if (media === null || typeof media !== 'object') return undefined;
-  const record = media as { url?: unknown; source?: { type?: unknown; data?: unknown; url?: unknown } };
-  if (typeof record.url === 'string' && record.url.length > 0) {
-    if (MEDIA_URL_FORM(record.url)) return record.url;
-    const mime = mediaMime(part);
-    if (mime && BASE64_PAYLOAD.test(record.url)) return `data:${mime};base64,${record.url}`;
-    return undefined;
-  }
-  const source = record.source;
-  if (source === null || typeof source !== 'object') return undefined;
-  const data = source.data;
-  if (typeof data === 'string' && data.length > 0) {
-    if (MEDIA_URL_FORM(data)) return data;
-    const mime = mediaMime(part);
-    if (source.type === 'base64' && mime && BASE64_PAYLOAD.test(data)) return `data:${mime};base64,${data}`;
-    return undefined;
-  }
-  // url-source assets keep the URL inside source (AssetEncoded JSON).
-  if (typeof source.url === 'string' && source.url.length > 0) {
-    return MEDIA_URL_FORM(source.url) ? source.url : undefined;
-  }
-  if (source.type === 'bytes' && data instanceof Uint8Array) {
-    const mime = mediaMime(part);
-    if (mime) return `data:${mime};base64,${Buffer.from(data).toString('base64')}`;
-  }
-  return undefined;
-}
-
-/** Core's request preparation calls startsWith on part.media.mediaType; a media part
- * without it (observed in compaction-hook messages) crashes every later model call.
- * Media parts therefore leave normalizeMessage only as a string form core can turn
- * into a real Asset, or as a text placeholder. */
-function normalizeMessage(message: OcMessage): OcMessage {
+/** Media parts in the hook's incoming messages are real core Asset instances,
+ * and core's request pipeline reads part.media.mediaType and part.media.source
+ * on the RAW hook output (unsupportedParts/boundImages) before Message.make
+ * rebuilds media — so only those instances survive it. The plugin cannot
+ * construct Assets (@opencode/ai is host-provided to plugins only as effect and
+ * @opencode/plugin), so stored media is revived from the matching live message
+ * when one exists, and degrades to a text note otherwise. That note is the same
+ * media fate a native compaction checkpoint gives: none (text only). */
+function reviveMedia(message: OcMessage, live?: OcMessage): OcMessage {
   const parts = partsOf(message);
   if (!parts.some((part) => part.type === 'media')) return message;
+  const liveMedia = live ? partsOf(live).filter((part) => part.type === 'media') : [];
+  let next = 0;
   const content = parts.map((part) => {
     if (part.type !== 'media') return part;
-    const media = mediaToString(part);
-    if (media) return { type: 'media', media, filename: part.filename };
-    return { type: 'text', text: '[unsupported media part removed]' };
+    const replacement = liveMedia[next++];
+    if (replacement) return replacement;
+    const name = typeof part.filename === 'string' ? part.filename : 'image';
+    return { type: 'text', text: `[attachment omitted: ${name}]` };
   });
   return { ...message, content };
 }
@@ -256,14 +178,21 @@ export function isMarkerSummary(message: OcMessage): boolean {
 }
 
 /** Stored verbatim list + everything new; markers and id duplicates dropped;
- * media parts normalized so an untyped part can never reach core's preparation. */
+ * stored media parts revived from the matching live message (real Asset
+ * instances — see reviveMedia); tail messages pass through by reference. */
 export function restoreMessages(
   stored: readonly OcMessage[],
   incoming: readonly OcMessage[],
 ): OcMessage[] {
   const ids = new Set(stored.map((message) => message.id).filter(Boolean) as string[]);
+  const liveById = new Map(
+    incoming.filter((message) => typeof message.id === 'string').map((message) => [message.id as string, message]),
+  );
   const tail = incoming.filter(
     (message) => !isMarkerSummary(message) && !(message.id && ids.has(message.id)),
   );
-  return [...stored, ...tail].map(normalizeMessage);
+  const body = stored.map((message) =>
+    reviveMedia(message, typeof message.id === 'string' ? liveById.get(message.id) : undefined),
+  );
+  return [...body, ...tail];
 }
