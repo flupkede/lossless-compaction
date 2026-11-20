@@ -1,6 +1,6 @@
 {
   "name": "fast-compaction-opencode",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "OpenCode 2.x plugin: verbatim compaction judged by fast-compaction",
   "type": "module",
   "dependencies": {
