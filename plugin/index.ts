@@ -28,6 +28,7 @@ const DEFAULTS = {
   ollamaTimeoutMs: 600_000,
   ollamaUrl: 'http://localhost:11434/v1/systemone',
   minReductionRatio: 0.25,
+  exhaustionRatio: 0.02,
 } as const;
 
 interface PluginOptions extends CompactOptions {
@@ -38,6 +39,11 @@ interface PluginOptions extends CompactOptions {
   ollamaTimeoutMs?: number;
   ollamaUrl?: string;
   minReductionRatio?: number;
+  /** Repeat-pass reduction under this ratio means the transcript is at its
+   * irreducible floor; the stored list is dropped and the native summary
+   * stands, so the context hook stops re-inflating the context above the
+   * host's compaction trigger. 0 disables. */
+  exhaustionRatio?: number;
   floodWindowMs?: number;
   floodMinCompactions?: number;
   floodMinCallsSinceCompact?: number;
@@ -80,6 +86,7 @@ export default Plugin.define({
       ollamaTimeoutMs,
       ollamaUrl,
       minReductionRatio,
+      exhaustionRatio,
       apiKey,
       floodWindowMs,
       floodMinCompactions,
@@ -113,6 +120,7 @@ export default Plugin.define({
       tolerateRequestFailures: rest.tolerateRequestFailures ?? true,
     };
     const floor = minReductionRatio ?? DEFAULTS.minReductionRatio;
+    const exhaustion = exhaustionRatio ?? DEFAULTS.exhaustionRatio;
     const storeKey = (sessionID: string) => `session/${sessionID}`;
     const num = (value: unknown, fallback: number) =>
       typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -162,18 +170,19 @@ export default Plugin.define({
         ) as OcMessage[];
         const fc = toFcMessages(incoming);
         const result = await compact(fc, judge, compactOptions);
+        const ratio = reductionRatio(result);
         // The floor guards only the first pass: with no stored list the native
         // summary is real and may beat a near-nothing reduction. Once storage
         // exists the summary is overridden by the context hook's restore, so
         // rejecting progress would pin the context at the old size forever.
-        if (stored === undefined && reductionRatio(result) < floor) {
+        if (stored === undefined && ratio < floor) {
           // tolerateRequestFailures turns a dead judge into ratio 0 here: log
           // the stats so requests:0 (judge down) is separable from few candidates
           ledger_({
             ts: new Date().toISOString(),
             session: event.sessionID,
             outcome: 'fallback-low',
-            ratio: reductionRatio(result),
+            ratio,
             ms: result.stats.ms,
             requests: result.stats.requests,
             kept: result.stats.messagesAfter,
@@ -181,6 +190,28 @@ export default Plugin.define({
             partial: result.stats.partial ?? false,
           });
           return; // below the floor: keep the native summary
+        }
+        // Treadmill escape: a repeat pass this far under the floor removed the
+        // little the judge will ever remove, but the context hook keeps
+        // re-inflating the context above the host's trigger, so the host
+        // re-fires every turn. Surrender the verbatim strategy for the
+        // session: drop the stored list (the restore stops, the context
+        // genuinely shrinks) and let the native summary stand. Partial passes
+        // still owe candidates to the next pass and never count as exhausted.
+        if (stored !== undefined && exhaustion > 0 && ratio < exhaustion && !(result.stats.partial ?? false)) {
+          ledger_({
+            ts: new Date().toISOString(),
+            session: event.sessionID,
+            outcome: 'fallback-exhausted',
+            ratio,
+            ms: result.stats.ms,
+            requests: result.stats.requests,
+            kept: result.stats.messagesAfter,
+            before: result.stats.messagesBefore,
+            partial: result.stats.partial ?? false,
+          });
+          await ctx.storage.remove(storeKey(event.sessionID));
+          return;
         }
         const resolved = resolveOptions(compactOptions);
         const calls = collectToolCalls(
@@ -202,7 +233,7 @@ export default Plugin.define({
           ts: new Date().toISOString(),
           session: event.sessionID,
           outcome: 'compacted',
-          ratio: reductionRatio(result),
+          ratio,
           ms: result.stats.ms,
           requests: result.stats.requests,
           kept: result.stats.messagesAfter,

@@ -1,3 +1,6 @@
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@opencode/plugin', () => ({ Plugin: { define: (definition: unknown) => definition } }));
@@ -32,6 +35,9 @@ function makeCtx(options: Record<string, unknown> = {}, storage = new Map<string
       get: async (key: string) => storage.get(key),
       set: async (key: string, value: unknown) => {
         storage.set(key, value);
+      },
+      remove: async (key: string) => {
+        storage.delete(key);
       },
     },
     session: {
@@ -88,6 +94,66 @@ describe('fast-compaction plugin hooks', () => {
     await hooks.compaction(event as never);
     expect(storage.has('session/s1')).toBe(true);
     expect((event as { result?: { summary: string } }).result?.summary).toMatch(/^\[fast-compaction\]/);
+  });
+
+  it('drops the stored list when a repeat pass is at the irreducible floor', async () => {
+    const { ctx, hooks, storage } = makeCtx();
+    storage.set('session/s4', [{ role: 'user', content: [{ type: 'text', text: 'old' }] }]);
+    await plugin.setup(ctx);
+    reductionRatio.mockReturnValue(0.004);
+    compact.mockReturnValue({ stats, decisions: [], messageDecisions: [] });
+    const event = { sessionID: 's4', messages: [] };
+    await hooks.compaction(event as never);
+    expect(storage.has('session/s4')).toBe(false);
+    expect((event as { result?: unknown }).result).toBeUndefined();
+  });
+
+  it('keeps a partial repeat pass even near zero reduction', async () => {
+    const { ctx, hooks, storage } = makeCtx();
+    storage.set('session/s5', [{ role: 'user', content: [{ type: 'text', text: 'old' }] }]);
+    await plugin.setup(ctx);
+    reductionRatio.mockReturnValue(0.004);
+    compact.mockReturnValue({
+      stats: { ...stats, partial: true },
+      decisions: [],
+      messageDecisions: [],
+    });
+    const event = { sessionID: 's5', messages: [] };
+    await hooks.compaction(event as never);
+    expect(storage.has('session/s5')).toBe(true);
+    expect((event as { result?: { summary: string } }).result?.summary).toMatch(/^\[fast-compaction\]/);
+  });
+
+  it('never exhausts when exhaustionRatio is 0', async () => {
+    const { ctx, hooks, storage } = makeCtx({ exhaustionRatio: 0 });
+    storage.set('session/s6', [{ role: 'user', content: [{ type: 'text', text: 'old' }] }]);
+    await plugin.setup(ctx);
+    reductionRatio.mockReturnValue(0.001);
+    compact.mockReturnValue({ stats, decisions: [], messageDecisions: [] });
+    const event = { sessionID: 's6', messages: [] };
+    await hooks.compaction(event as never);
+    expect(storage.has('session/s6')).toBe(true);
+    expect((event as { result?: { summary: string } }).result?.summary).toMatch(/^\[fast-compaction\]/);
+  });
+
+  it('ledger rows for exhaustion carry outcome fallback-exhausted', async () => {
+    const ledgerPath = join(tmpdir(), `fc-plugin-ledger-${process.pid}-${Date.now()}.jsonl`);
+    const { ctx, hooks, storage } = makeCtx({ ledger: ledgerPath });
+    storage.set('session/s7', [{ role: 'user', content: [{ type: 'text', text: 'old' }] }]);
+    await plugin.setup(ctx);
+    reductionRatio.mockReturnValue(0.004);
+    compact.mockReturnValue({ stats, decisions: [], messageDecisions: [] });
+    await hooks.compaction({ sessionID: 's7', messages: [] } as never);
+    const rows = readFileSync(ledgerPath, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    rmSync(ledgerPath, { force: true });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      session: 's7',
+      outcome: 'fallback-exhausted',
+      ratio: 0.004,
+      before: stats.messagesBefore,
+      kept: stats.messagesAfter,
+    });
   });
 
   it('keeps the native summary when the judge throws', async () => {
